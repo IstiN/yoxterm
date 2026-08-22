@@ -339,6 +339,20 @@ class BufferLine with IndexedItem {
     return anchor;
   }
 
+  /// Erases all cells and resets per-line state ([isWrapped], anchors) so the
+  /// line can be reused as a fresh empty line. Used to recycle scrolled-out
+  /// lines instead of allocating a new [BufferLine] per scrolled line.
+  void reset() {
+    _data.fillRange(0, _data.length, 0);
+    isWrapped = false;
+    // Detach anchors that still point at this line (e.g. selection ends) so
+    // they don't silently follow the line into its new position. Iterate
+    // backwards: disposing an anchor removes it from [_anchors].
+    for (var i = _anchors.length - 1; i >= 0; i--) {
+      _anchors[i].dispose();
+    }
+  }
+
   void dispose() {
     for (final anchor in _anchors) {
       anchor.dispose();

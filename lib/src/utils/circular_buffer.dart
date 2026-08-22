@@ -136,7 +136,13 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
 
   /// Adds [value] to the end of the list. May cause the first element to be
   /// trimmed if the list is full.
-  void push(T value) {
+  ///
+  /// Returns the trimmed (evicted) first element when the list was full, or
+  /// null when nothing was evicted. The returned element is already detached
+  /// and may be recycled by the caller.
+  T? push(T value) {
+    final evicted = _length == _array.length ? _getChild(0) : null;
+
     _adoptChild(_length, value);
 
     if (_length == _array.length) {
@@ -150,6 +156,8 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
       // When the list is not full, we just increase the length
       _length++;
     }
+
+    return evicted;
   }
 
   /// Removes and returns the last value on the list, throws if the list is
@@ -185,7 +193,8 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
     RangeError.checkValueInInterval(index, 0, _length, 'index');
 
     if (index == _length) {
-      return push(item);
+      push(item);
+      return;
     }
 
     if (index == 0 && _length >= _array.length) {

@@ -18,6 +18,11 @@ class TerminalPainter {
   /// Reusable CellData to avoid allocation per line during paint.
   final _reusableCellData = CellData.empty();
 
+  /// Reusable StringBuffer for building merged text runs in [paintLine].
+  /// Runs are consumed (toString) and the buffer is cleared before the next
+  /// run/line, so a single instance can be shared across the paint pass.
+  final _reusableTextRun = StringBuffer();
+
   /// A lookup table from terminal colors to Flutter colors.
   late var _colorPalette = PaletteBuilder(_theme).build();
 
@@ -201,7 +206,7 @@ class TerminalPainter {
       bgRunStartCol = endCol;
     }
 
-    final textRun = StringBuffer();
+    final textRun = _reusableTextRun;
     // -1 = no active run (flags bitmask itself can be 0).
     var textRunFlags = -1;
     var textRunStartCol = 0;

@@ -244,4 +244,65 @@ void main() {
       expect(terminal.buffer.lines[2].toString(), '');
     });
   });
+
+  group('Buffer line recycling', () {
+    test('recycles scrolled-out lines when the buffer is full', () {
+      final terminal = Terminal(maxLines: 20);
+      terminal.resize(10, 5);
+
+      // Fill the buffer exactly to capacity (no eviction yet).
+      for (var i = 0; i < 19; i++) {
+        terminal.write('line$i\r\n');
+      }
+      expect(terminal.buffer.lines.length, 20);
+
+      final before = terminal.buffer.lines.toList();
+
+      // Scroll 20 more lines through the buffer.
+      for (var i = 19; i < 39; i++) {
+        terminal.write('line$i\r\n');
+      }
+
+      expect(terminal.buffer.lines.length, 20);
+
+      // Every line in the buffer is a recycled instance from before.
+      final after = terminal.buffer.lines.toList();
+      for (final line in after) {
+        expect(before.any((it) => identical(it, line)), isTrue);
+      }
+
+      // Contents stay correct: oldest lines scrolled out, newest present.
+      final text = terminal.buffer.getText();
+      expect(text, contains('line38'));
+      expect(text, isNot(contains('line0')));
+      expect(text, isNot(contains('line1\n')));
+    });
+
+    test('recycled lines are erased and their anchors are detached', () {
+      final terminal = Terminal();
+      terminal.resize(10, 5);
+      // Shrink the scrollback cap after resizing (maxLines smaller than the
+      // default view height would break Terminal.resize).
+      terminal.buffer.lines.maxLength = 10;
+
+      for (var i = 0; i < 9; i++) {
+        terminal.write('line$i\r\n');
+      }
+      expect(terminal.buffer.lines.length, 10);
+
+      // Anchor a cell on the oldest line, then scroll that line out.
+      final anchor = terminal.buffer.createAnchor(0, 0);
+      expect(anchor.attached, isTrue);
+
+      terminal.write('overflow\r\n');
+
+      // The anchored line was recycled: the anchor must not follow it.
+      expect(anchor.attached, isFalse);
+
+      // Old content is gone, new content is present.
+      final text = terminal.buffer.getText();
+      expect(text, contains('overflow'));
+      expect(text, isNot(contains('line0')));
+    });
+  });
 }

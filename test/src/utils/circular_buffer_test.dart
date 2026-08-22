@@ -64,6 +64,25 @@ void main() {
       expect(cl[9], 10.indexed);
     });
 
+    test('push returns the evicted element when full', () {
+      final cl = IndexAwareCircularBuffer<IndexedValue<int>>(3);
+
+      // Nothing is evicted while the buffer is not full.
+      expect(cl.push(1.indexed), isNull);
+      expect(cl.push(2.indexed), isNull);
+      expect(cl.push(3.indexed), isNull);
+
+      final first = cl[0];
+      final evicted = cl.push(4.indexed);
+
+      // The evicted element is returned, already detached.
+      expect(identical(evicted, first), isTrue);
+      expect(evicted!.attached, isFalse);
+      expect(cl.length, 3);
+      expect(cl[0], 2.indexed);
+      expect(cl[2], 4.indexed);
+    });
+
     test("change max value after circle", () {
       final cl = IndexAwareCircularBuffer<IndexedValue<int>>(10);
       cl.pushAll(

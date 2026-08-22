@@ -335,6 +335,10 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   }
 
   void _notifyEditableRect() {
+    final onEditableRect = _onEditableRect;
+    // Skip the localToGlobal/Rect math entirely when nobody is listening.
+    if (onEditableRect == null) return;
+
     final cursor = localToGlobal(cursorOffset);
 
     final rect = Rect.fromLTRB(
@@ -346,7 +350,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
     final caretRect = cursor & _painter.cellSize;
 
-    _onEditableRect?.call(rect, caretRect);
+    onEditableRect(rect, caretRect);
   }
 
   /// Update the viewport size in cells based on the current widget size in

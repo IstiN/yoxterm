@@ -248,7 +248,12 @@ class Buffer {
     if (isInVerticalMargin) {
       if (_cursorY == _marginBottom) {
         if (marginTop == 0 && !isAltBuffer) {
-          lines.insert(absoluteMarginBottom + 1, _newEmptyLine());
+          // Inserting past the bottom scrolls the oldest line out when the
+          // buffer is full. Reuse that line instead of allocating a new one:
+          // under output floods this allocation (BufferLine + its cell data
+          // array) was the dominant source of GC pressure.
+          final line = lines.isFull ? (lines[0]..reset()) : _newEmptyLine();
+          lines.insert(absoluteMarginBottom + 1, line);
         } else {
           scrollUp(1);
         }
@@ -264,7 +269,9 @@ class Buffer {
       if (isAltBuffer) {
         scrollUp(1);
       } else {
-        lines.push(_newEmptyLine());
+        // See above: recycle the scrolled-out line when the buffer is full.
+        final line = lines.isFull ? (lines[0]..reset()) : _newEmptyLine();
+        lines.push(line);
       }
     } else {
       // there're still lines so we simply move cursor down.
