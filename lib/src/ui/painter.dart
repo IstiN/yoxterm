@@ -23,6 +23,13 @@ class TerminalPainter {
   /// run/line, so a single instance can be shared across the paint pass.
   final _reusableTextRun = StringBuffer();
 
+  /// Reusable Paint for all solid rect/line fills (background runs, cursor,
+  /// highlights, box drawing, cell backgrounds). Canvas records the paint's
+  /// attributes synchronously at each draw call, so mutating a single
+  /// instance between calls is safe and avoids one allocation per run/cell
+  /// per frame — significant for box-drawing-heavy TUIs at 60fps.
+  final _fillPaint = Paint()..isAntiAlias = false;
+
   /// A lookup table from terminal colors to Flutter colors.
   late var _colorPalette = PaletteBuilder(_theme).build();
 
@@ -103,10 +110,10 @@ class TerminalPainter {
     required TerminalCursorType cursorType,
     bool hasFocus = true,
   }) {
-    final paint = Paint()
+    final paint = _fillPaint
       ..color = _theme.cursor
       ..strokeWidth = 1
-      ..isAntiAlias = false;
+      ..style = PaintingStyle.fill;
 
     if (!hasFocus) {
       paint.style = PaintingStyle.stroke;
@@ -142,10 +149,10 @@ class TerminalPainter {
     final endOffset =
         offset.translate(length * _cellSize.width, _cellSize.height);
 
-    final paint = Paint()
+    final paint = _fillPaint
       ..color = color
       ..strokeWidth = 1
-      ..isAntiAlias = false;
+      ..style = PaintingStyle.fill;
 
     canvas.drawRect(
       _snapRect(Rect.fromPoints(offset, endOffset)),
@@ -191,9 +198,9 @@ class TerminalPainter {
         bgRunStartCol = endCol;
         return;
       }
-      final paint = Paint()
+      final paint = _fillPaint
         ..color = color
-        ..isAntiAlias = false;
+        ..style = PaintingStyle.fill;
       canvas.drawRect(
         Rect.fromLTRB(
           _snap(offset.dx + bgRunStartCol * cellWidth),
@@ -482,9 +489,9 @@ class TerminalPainter {
     double height, {
     required bool bold,
   }) {
-    final paint = Paint()
+    final paint = _fillPaint
       ..color = color
-      ..isAntiAlias = false;
+      ..style = PaintingStyle.fill;
 
     final left = offset.dx;
     final right = offset.dx + width;
@@ -703,9 +710,9 @@ class TerminalPainter {
       color = resolveBackgroundColor(cellData.background);
     }
 
-    final paint = Paint()
+    final paint = _fillPaint
       ..color = color
-      ..isAntiAlias = false;
+      ..style = PaintingStyle.fill;
     final y1 = offset.dy + _cellSize.height;
     canvas.drawRect(Rect.fromLTRB(offset.dx, offset.dy, rightEdge, y1), paint);
   }

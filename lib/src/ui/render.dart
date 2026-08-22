@@ -73,6 +73,10 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// Number of scrollback lines above which main-buffer resizes are debounced.
   static const _largeScrollbackThreshold = 100;
 
+  /// Reusable Paint for the per-frame background fill. Canvas records the
+  /// paint's attributes synchronously, so one mutable instance is enough.
+  final _backgroundPaint = Paint()..isAntiAlias = false;
+
   Terminal _terminal;
   set terminal(Terminal terminal) {
     if (_terminal == terminal) return;
@@ -514,9 +518,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     // pixel-perfect edges even when the board canvas has a fractional scale.
     canvas.drawRect(
       paintBounds,
-      Paint()
-        ..color = _painter.theme.background
-        ..isAntiAlias = false,
+      _backgroundPaint..color = _painter.theme.background,
     );
 
     final lines = _terminal.buffer.lines;
