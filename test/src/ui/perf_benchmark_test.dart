@@ -1,0 +1,113 @@
+import 'dart:ui';
+
+import 'package:flutter/widgets.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:xterm/src/ui/painter.dart';
+import 'package:xterm/xterm.dart';
+
+import '../../_fixture/_fixture.dart';
+
+/// Time-based throughput benchmark for the terminal hot paths. Complements
+/// draw_ops_bench_test.dart (which counts canvas ops) with wall-clock numbers
+/// so regressions show up as numbers, not just op counts. Prints only — no
+/// timing assertions, to stay stable on loaded CI machines.
+void main() {
+  test('perf benchmark: parse + paint throughput', () {
+    // ── 1. Parse throughput (flood-style plain lines) ──────────────────────
+    const line =
+        'The quick brown fox jumps over the lazy dog 0123456789 !@#\$%^&*()\r\n';
+    final chunk = line * 100;
+    const iterations = 300; // 30k lines ≈ 2.2 MB
+
+    var terminal = Terminal(maxLines: 1000);
+    final parseSw = Stopwatch()..start();
+    for (var i = 0; i < iterations; i++) {
+      terminal.write(chunk);
+    }
+    parseSw.stop();
+
+    final totalMb = (chunk.length * iterations) / (1024 * 1024);
+    final parseSeconds = parseSw.elapsedMicroseconds / 1e6;
+    // ignore: avoid_print
+    print(
+      'parse flood: ${(totalMb / parseSeconds).toStringAsFixed(1)} MB/s, '
+      '${(parseSw.elapsedMicroseconds / (iterations * 100)).toStringAsFixed(2)} µs/line '
+      '(incl. scrollback recycling)',
+    );
+
+    // ── 2. Parse throughput with SGR colors (agent-output-like mix) ───────
+    const coloredLine =
+        '\x1b[32m✓\x1b[0m test_passes \x1b[90mtest/unit/foo_test.dart\x1b[0m \x1b[33m12ms\x1b[0m\r\n';
+    final coloredChunk = coloredLine * 100;
+
+    terminal = Terminal(maxLines: 1000);
+    final colorSw = Stopwatch()..start();
+    for (var i = 0; i < iterations; i++) {
+      terminal.write(coloredChunk);
+    }
+    colorSw.stop();
+
+    final coloredMb = (coloredChunk.length * iterations) / (1024 * 1024);
+    final colorSeconds = colorSw.elapsedMicroseconds / 1e6;
+    // ignore: avoid_print
+    print(
+      'parse sgr:   ${(coloredMb / colorSeconds).toStringAsFixed(1)} MB/s, '
+      '${(colorSw.elapsedMicroseconds / (iterations * 100)).toStringAsFixed(2)} µs/line',
+    );
+
+    // ── 3. Paint throughput on realistic htop content ──────────────────────
+    final paintTerminal = Terminal();
+    paintTerminal.write(TestFixtures.htop_80x25_3s());
+
+    final painter = TerminalPainter(
+      theme: TerminalThemes.defaultTheme,
+      textStyle: const TerminalStyle(fontSize: 13),
+      textScaler: TextScaler.noScaling,
+    );
+    final lines = paintTerminal.buffer.lines;
+
+    void paintFrame(Canvas canvas) {
+      for (var li = 0; li < lines.length; li++) {
+        painter.paintLine(canvas, Offset(0, li * 16.0), lines[li]);
+      }
+    }
+
+    // Warm-up: fills the paragraph cache (steady state = user reading a
+    // static screen, repaint triggered by cursor blink or board pan).
+    final recorder = PictureRecorder();
+    paintFrame(Canvas(recorder));
+    recorder.endRecording().dispose();
+
+    const warmFrames = 300;
+    final warmRecorder = PictureRecorder();
+    final warmCanvas = Canvas(warmRecorder);
+    final warmSw = Stopwatch()..start();
+    for (var f = 0; f < warmFrames; f++) {
+      paintFrame(warmCanvas);
+    }
+    warmSw.stop();
+    warmRecorder.endRecording().dispose();
+    // ignore: avoid_print
+    print(
+      'paint warm (cached): ${(warmSw.elapsedMicroseconds / warmFrames).toStringAsFixed(0)} µs/frame '
+      'for ${lines.length} lines',
+    );
+
+    // Cold: clear the paragraph cache before every frame — worst case of a
+    // flood repaint, where every line's text is new and all layouts miss.
+    const coldFrames = 30;
+    final coldSw = Stopwatch()..start();
+    for (var f = 0; f < coldFrames; f++) {
+      painter.clearFontCache();
+      final coldRecorder = PictureRecorder();
+      paintFrame(Canvas(coldRecorder));
+      coldRecorder.endRecording().dispose();
+    }
+    coldSw.stop();
+    // ignore: avoid_print
+    print(
+      'paint cold (all miss): ${(coldSw.elapsedMicroseconds / coldFrames).toStringAsFixed(0)} µs/frame '
+      '(incl. cache clear)',
+    );
+  });
+}
