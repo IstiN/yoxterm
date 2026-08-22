@@ -197,7 +197,8 @@ class TerminalPainter {
         : resolveBackgroundColor(cellData.background);
 
     if (cellData.flags & CellFlags.faint != 0) {
-      color = color.withOpacity(0.5);
+      // withAlpha(128) == withOpacity(0.5) but skips the double math.
+      color = color.withAlpha(128);
     }
 
     // Use the actual snapped cell width so lines exactly meet edges.

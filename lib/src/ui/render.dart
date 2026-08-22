@@ -459,7 +459,14 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   @override
   void paint(PaintingContext context, Offset offset) {
     _paint(context, offset);
-    context.setWillChangeHint();
+    // Hint that this picture is expensive to rasterize so the engine keeps it
+    // in the raster cache while it is unchanged (board pan/zoom, overlays,
+    // animations elsewhere). The will-change hint used here before permanently
+    // disabled caching of this layer — it is a cache hint only and never
+    // gated repaints: buffer changes still trigger markNeedsPaint via
+    // _onTerminalChange, which produces a new picture that simply evicts the
+    // stale cache entry.
+    context.setIsComplexHint();
   }
 
   void _paint(PaintingContext context, Offset offset) {
