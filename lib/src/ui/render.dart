@@ -58,6 +58,18 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   Timer? _altResizeDebounce;
   TerminalSize? _pendingViewportSize;
 
+  /// Output-driven repaints are capped at ~60fps. On 120Hz ProMotion
+  /// displays the engine would otherwise repaint the whole visible buffer on
+  /// every vsync while output streams, doubling UI-thread, raster and GC cost
+  /// with no perceptible benefit (terminal text is unreadable above ~30fps
+  /// anyway). The throttle keys off actual [paint] timestamps, so it stays
+  /// inert on 60Hz displays (vsync already spaces paints by ~16.7ms) and in
+  /// widget tests (pumps are farther apart than the interval, so
+  /// [markNeedsPaint] is always called synchronously there).
+  static const _minOutputPaintInterval = Duration(milliseconds: 16);
+  DateTime _lastOutputPaint = DateTime.fromMillisecondsSinceEpoch(0);
+  bool _outputPaintScheduled = false;
+
   /// Number of scrollback lines above which main-buffer resizes are debounced.
   static const _largeScrollbackThreshold = 100;
 
@@ -187,8 +199,27 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   void _onTerminalChange() {
     _scheduleLayout();
-    markNeedsPaint();
+    _scheduleOutputPaint();
     _notifyEditableRect();
+  }
+
+  /// Rate-limits output-driven repaints (see [_minOutputPaintInterval]).
+  /// Scroll, selection and other user-driven repaints bypass this throttle.
+  void _scheduleOutputPaint() {
+    if (_outputPaintScheduled) return;
+    final elapsed = DateTime.now().difference(_lastOutputPaint);
+    if (elapsed >= _minOutputPaintInterval) {
+      markNeedsPaint();
+      return;
+    }
+    // A frame callback (not a Timer) keeps widget tests free of pending-timer
+    // failures and piggybacks on the next scheduled frame instead of forcing
+    // an extra one.
+    _outputPaintScheduled = true;
+    SchedulerBinding.instance.scheduleFrameCallback((_) {
+      _outputPaintScheduled = false;
+      if (attached) markNeedsPaint();
+    });
   }
 
   void _onControllerUpdate() {
@@ -462,6 +493,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   @override
   void paint(PaintingContext context, Offset offset) {
+    _lastOutputPaint = DateTime.now();
     _paint(context, offset);
     // Hint that this picture is expensive to rasterize so the engine keeps it
     // in the raster cache while it is unchanged (board pan/zoom, overlays,
