@@ -150,6 +150,23 @@ class TerminalPainter {
 
   /// Paints [line] to [canvas] at [offset]. The x offset of [offset] is usually
   /// 0, and the y offset is the top of the line.
+  ///
+  /// Adjacent cells with the same resolved background are painted as a single
+  /// rect, and adjacent mergeable foreground cells (printable ASCII,
+  /// single-width, same style) are painted as a single text run with one
+  /// drawParagraph call. Painting per cell costs one Impeller entity + one
+  /// Metal draw call per glyph, which saturated the raster thread when several
+  /// terminals flooded output (~10k cells per frame per terminal). The font is
+  /// monospace, so a run of ASCII glyphs lands exactly on cell boundaries;
+  /// ligatures are disabled in runs to stay pixel-identical with the per-cell
+  /// path, which can never ligate single characters.
+  ///
+  /// Draw order mirrors the per-cell path: before a text run (or a lone
+  /// non-mergeable cell) is drawn, the pending background run is flushed up to
+  /// the run's end column. Per cell this is bg(i), fg(i), bg(i+1), fg(i+1)…,
+  /// so the next cell's background covers the previous glyph's right-edge
+  /// antialiasing bleed; flushing the background segment first preserves that
+  /// exact ordering at run granularity.
   void paintLine(
     Canvas canvas,
     Offset offset,
@@ -157,24 +174,199 @@ class TerminalPainter {
   ) {
     final cellData = _reusableCellData;
     final cellWidth = _cellSize.width;
+    final snappedY = _snap(offset.dy);
+
+    Color? bgRunColor;
+    var bgRunStartCol = 0;
+
+    void flushBackgroundRun(int endCol) {
+      if (endCol == bgRunStartCol) return;
+      final color = bgRunColor;
+      if (color == null) {
+        bgRunStartCol = endCol;
+        return;
+      }
+      final paint = Paint()
+        ..color = color
+        ..isAntiAlias = false;
+      canvas.drawRect(
+        Rect.fromLTRB(
+          _snap(offset.dx + bgRunStartCol * cellWidth),
+          snappedY,
+          _snap(offset.dx + endCol * cellWidth),
+          snappedY + _cellSize.height,
+        ),
+        paint,
+      );
+      bgRunStartCol = endCol;
+    }
+
+    final textRun = StringBuffer();
+    // -1 = no active run (flags bitmask itself can be 0).
+    var textRunFlags = -1;
+    var textRunStartCol = 0;
+    var textRunForeground = 0;
+    var textRunBackground = 0;
+
+    // Paints the text run covering [textRunStartCol, endCol), flushing the
+    // pending background segment first (see the doc comment for why).
+    void flushTextRun(int endCol) {
+      if (textRunFlags < 0) return;
+      flushBackgroundRun(endCol);
+      _paintTextRun(
+        canvas,
+        Offset(_snap(offset.dx + textRunStartCol * cellWidth), snappedY),
+        textRun.toString(),
+        textRunFlags,
+        textRunForeground,
+        textRunBackground,
+      );
+      textRun.clear();
+      textRunFlags = -1;
+    }
 
     for (var i = 0; i < line.length; i++) {
       line.getCellData(i, cellData);
 
       final charWidth = cellData.content >> CellContent.widthShift;
+      final charCode = cellData.content & CellContent.codepointMask;
       final effectiveCols = charWidth == 2 ? 2 : 1;
-      // Snap directly from the original offset so that cellRight(i)
-      // always equals cellLeft(i+1), eliminating rounding gaps.
-      final cellLeft = _snap(offset.dx + i * cellWidth);
-      final cellRight = _snap(offset.dx + (i + effectiveCols) * cellWidth);
-      final cellOffset = Offset(cellLeft, _snap(offset.dy));
 
-      paintCell(canvas, cellOffset, cellData, cellRight);
+      // Background run: break on a different resolved color.
+      final bg = _resolvedCellBackground(cellData);
+      if (bg != bgRunColor) {
+        flushBackgroundRun(i);
+        bgRunColor = bg;
+      }
+
+      // Foreground: merge printable single-width ASCII with equal style.
+      // Faint cells are excluded: their alpha-128 glyph coverage rounds a
+      // couple of levels differently between a run paragraph and single-cell
+      // paragraphs (subpixel AA), which golden tests catch. Italic cells are
+      // excluded for the same reason: synthetic-italic skew rasterizes
+      // slightly differently in a multi-glyph run. Spaces are excluded too:
+      // a plain space paints nothing, and keeping it out of the run lets the
+      // pending background segment cover the previous glyph's right-edge AA
+      // bleed exactly like the per-cell path does.
+      final mergeable = charWidth == 1 &&
+          charCode > 0x20 &&
+          charCode <= 0x7E &&
+          cellData.flags & (CellFlags.faint | CellFlags.italic) == 0;
+      if (mergeable) {
+        final flags = cellData.flags;
+        if (textRunFlags >= 0 &&
+            flags == textRunFlags &&
+            cellData.foreground == textRunForeground &&
+            cellData.background == textRunBackground) {
+          textRun.writeCharCode(charCode);
+        } else {
+          flushTextRun(i);
+          textRunStartCol = i;
+          textRunFlags = flags;
+          textRunForeground = cellData.foreground;
+          textRunBackground = cellData.background;
+          textRun.writeCharCode(charCode);
+        }
+      } else {
+        flushTextRun(i);
+        // A plain space paints nothing (no glyph, no underline) — skip it
+        // entirely. Its background stays in the pending bg run, which keeps
+        // the per-cell draw order (next cell's bg covers the previous glyph's
+        // right-edge AA bleed).
+        if (charCode != 0 &&
+            !(charCode == 0x20 && cellData.flags & CellFlags.underline == 0)) {
+          // Snap directly from the original offset so that cellRight(i)
+          // always equals cellLeft(i+1), eliminating rounding gaps.
+          final cellLeft = _snap(offset.dx + i * cellWidth);
+          final cellRight = _snap(offset.dx + (i + effectiveCols) * cellWidth);
+          // Paint this cell's background segment first, exactly like the
+          // per-cell path does (bg then fg per cell).
+          flushBackgroundRun(i + effectiveCols);
+          paintCellForeground(
+            canvas,
+            Offset(cellLeft, snappedY),
+            cellData,
+            cellRight,
+          );
+        }
+      }
 
       if (charWidth == 2) {
         i++;
       }
     }
+
+    flushTextRun(line.length);
+    flushBackgroundRun(line.length);
+  }
+
+  /// Resolves the effective background color of a cell, mirroring
+  /// [paintCellBackground]. Returns null when the cell shows the theme
+  /// background (nothing is painted).
+  Color? _resolvedCellBackground(CellData cellData) {
+    if (cellData.flags & CellFlags.inverse != 0) {
+      return resolveForegroundColor(cellData.foreground);
+    }
+    if (cellData.background & CellColor.typeMask == CellColor.normal) {
+      return null;
+    }
+    return resolveBackgroundColor(cellData.background);
+  }
+
+  /// Paints a merged run of same-style printable ASCII cells as a single
+  /// paragraph. Style resolution mirrors [paintCellForeground].
+  void _paintTextRun(
+    Canvas canvas,
+    Offset offset,
+    String text,
+    int flags,
+    int foreground,
+    int background,
+  ) {
+    var color = flags & CellFlags.inverse == 0
+        ? resolveForegroundColor(foreground)
+        : resolveBackgroundColor(background);
+
+    if (flags & CellFlags.faint != 0) {
+      color = color.withAlpha(128);
+    }
+
+    final cacheKey = Object.hash(
+      text,
+      flags,
+      foreground,
+      background,
+      _textScaler,
+    );
+    var paragraph = _paragraphCache.getLayoutFromCache(cacheKey);
+    if (paragraph == null) {
+      final style = _textStyle
+          .toTextStyle(
+            color: color,
+            bold: flags & CellFlags.bold != 0,
+            italic: flags & CellFlags.italic != 0,
+            underline: flags & CellFlags.underline != 0,
+          )
+          // Single cells can never kern or ligate, so disable both in runs
+          // to stay pixel-identical with the per-cell path.
+          .copyWith(
+            fontFeatures: const [
+              FontFeature.disable('kern'),
+              FontFeature.disable('liga'),
+              FontFeature.disable('clig'),
+              FontFeature.disable('calt'),
+            ],
+          );
+
+      paragraph = _paragraphCache.performAndCacheLayout(
+        text,
+        style,
+        _textScaler,
+        cacheKey,
+      );
+    }
+
+    canvas.drawParagraph(paragraph, offset);
   }
 
   @pragma('vm:prefer-inline')
