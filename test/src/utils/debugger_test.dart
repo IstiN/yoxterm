@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/utils/debugger.dart';
+import 'package:yoxterm/src/utils/debugger.dart';
 
 /// Renders a sequence in a form suitable for test names.
 String visualize(String sequence) {

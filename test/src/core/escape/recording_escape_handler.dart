@@ -1,4 +1,4 @@
-import 'package:xterm/xterm.dart';
+import 'package:yoxterm/xterm.dart';
 
 /// An [EscapeHandler] that records every invocation as a string in [calls],
 /// e.g. `resize(80, 24)`. Tests assert on the exact sequence of calls, which

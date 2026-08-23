@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/xterm.dart';
+import 'package:yoxterm/xterm.dart';
 
 /// Writes [text] (ASCII only) into [line] starting at cell 0.
 void writeAscii(BufferLine line, String text) {

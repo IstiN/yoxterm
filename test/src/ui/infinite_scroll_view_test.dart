@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/infinite_scroll_view.dart';
+import 'package:yoxterm/src/ui/infinite_scroll_view.dart';
 
 void main() {
   group('InfiniteScrollView', () {

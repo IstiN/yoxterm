@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
-import 'package:xterm/src/ui/terminal_theme.dart';
-import 'package:xterm/src/utils/lookup_table.dart';
+import 'package:yoxterm/src/ui/terminal_theme.dart';
+import 'package:yoxterm/src/utils/lookup_table.dart';
 
 class PaletteBuilder {
   final TerminalTheme theme;

@@ -1,6 +1,6 @@
-import 'package:xterm/src/core/cursor.dart';
-import 'package:xterm/src/core/mouse/mode.dart';
-import 'package:xterm/src/core/state.dart';
+import 'package:yoxterm/src/core/cursor.dart';
+import 'package:yoxterm/src/core/mouse/mode.dart';
+import 'package:yoxterm/src/core/state.dart';
 
 /// A mutable [TerminalState] implementation for input and mouse handler tests.
 ///

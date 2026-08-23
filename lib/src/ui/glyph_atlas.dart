@@ -3,8 +3,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
 
-import 'package:xterm/src/core/buffer/cell_flags.dart';
-import 'package:xterm/src/ui/terminal_text_style.dart';
+import 'package:yoxterm/src/core/buffer/cell_flags.dart';
+import 'package:yoxterm/src/ui/terminal_text_style.dart';
 
 /// A lazily filled atlas of pre-rasterized glyph tiles.
 ///

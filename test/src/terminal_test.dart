@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/core.dart';
+import 'package:yoxterm/core.dart';
 
 void main() {
   group('Terminal.inputHandler', () {

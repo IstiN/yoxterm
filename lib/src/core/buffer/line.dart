@@ -1,11 +1,11 @@
 import 'dart:math' show min;
 import 'dart:typed_data';
 
-import 'package:xterm/src/core/buffer/cell_offset.dart';
-import 'package:xterm/src/core/cell.dart';
-import 'package:xterm/src/core/cursor.dart';
-import 'package:xterm/src/utils/circular_buffer.dart';
-import 'package:xterm/src/utils/unicode_v11.dart';
+import 'package:yoxterm/src/core/buffer/cell_offset.dart';
+import 'package:yoxterm/src/core/cell.dart';
+import 'package:yoxterm/src/core/cursor.dart';
+import 'package:yoxterm/src/utils/circular_buffer.dart';
+import 'package:yoxterm/src/utils/unicode_v11.dart';
 
 const _cellSize = 4;
 

@@ -1,24 +1,24 @@
 import 'dart:math' show max;
 
-import 'package:xterm/src/base/observable.dart';
-import 'package:xterm/src/core/buffer/buffer.dart';
-import 'package:xterm/src/core/buffer/cell_offset.dart';
-import 'package:xterm/src/core/buffer/line.dart';
-import 'package:xterm/src/core/cursor.dart';
-import 'package:xterm/src/core/escape/emitter.dart';
-import 'package:xterm/src/core/escape/handler.dart';
-import 'package:xterm/src/core/escape/parser.dart';
-import 'package:xterm/src/core/input/handler.dart';
-import 'package:xterm/src/core/input/keys.dart';
-import 'package:xterm/src/core/mouse/button.dart';
-import 'package:xterm/src/core/mouse/button_state.dart';
-import 'package:xterm/src/core/mouse/handler.dart';
-import 'package:xterm/src/core/mouse/mode.dart';
-import 'package:xterm/src/core/platform.dart';
-import 'package:xterm/src/core/state.dart';
-import 'package:xterm/src/core/tabs.dart';
-import 'package:xterm/src/utils/ascii.dart';
-import 'package:xterm/src/utils/circular_buffer.dart';
+import 'package:yoxterm/src/base/observable.dart';
+import 'package:yoxterm/src/core/buffer/buffer.dart';
+import 'package:yoxterm/src/core/buffer/cell_offset.dart';
+import 'package:yoxterm/src/core/buffer/line.dart';
+import 'package:yoxterm/src/core/cursor.dart';
+import 'package:yoxterm/src/core/escape/emitter.dart';
+import 'package:yoxterm/src/core/escape/handler.dart';
+import 'package:yoxterm/src/core/escape/parser.dart';
+import 'package:yoxterm/src/core/input/handler.dart';
+import 'package:yoxterm/src/core/input/keys.dart';
+import 'package:yoxterm/src/core/mouse/button.dart';
+import 'package:yoxterm/src/core/mouse/button_state.dart';
+import 'package:yoxterm/src/core/mouse/handler.dart';
+import 'package:yoxterm/src/core/mouse/mode.dart';
+import 'package:yoxterm/src/core/platform.dart';
+import 'package:yoxterm/src/core/state.dart';
+import 'package:yoxterm/src/core/tabs.dart';
+import 'package:yoxterm/src/utils/ascii.dart';
+import 'package:yoxterm/src/utils/circular_buffer.dart';
 
 /// [Terminal] is an interface to interact with command line applications. It
 /// translates escape sequences from the application into updates to the

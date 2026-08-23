@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/core/charset.dart';
+import 'package:yoxterm/src/core/charset.dart';
 
 void main() {
   group('asciiTranslator', () {

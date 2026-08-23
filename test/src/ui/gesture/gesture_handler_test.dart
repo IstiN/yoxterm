@@ -1,8 +1,8 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/gesture/gesture_handler.dart';
-import 'package:xterm/xterm.dart';
+import 'package:yoxterm/src/ui/gesture/gesture_handler.dart';
+import 'package:yoxterm/xterm.dart';
 
 void main() {
   Future<TerminalViewState> pumpTerminalView(

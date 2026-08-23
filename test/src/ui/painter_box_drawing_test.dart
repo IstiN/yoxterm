@@ -4,8 +4,8 @@ import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/painter.dart';
-import 'package:xterm/xterm.dart';
+import 'package:yoxterm/src/ui/painter.dart';
+import 'package:yoxterm/xterm.dart';
 
 /// Records every rect/paragraph/atlas call with the paint color attached, so
 /// box-drawing geometry can be asserted exactly.

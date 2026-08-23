@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/xterm.dart';
-import 'package:xterm/src/ui/shortcut/actions.dart';
+import 'package:yoxterm/xterm.dart';
+import 'package:yoxterm/src/ui/shortcut/actions.dart';
 
 void main() {
   late List<MethodCall> clipboardCalls;

@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/core/escape/emitter.dart';
+import 'package:yoxterm/src/core/escape/emitter.dart';
 
 void main() {
   const emitter = EscapeEmitter();

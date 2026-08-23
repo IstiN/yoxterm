@@ -1,7 +1,7 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/core/input/keytab/keytab_parse.dart';
-import 'package:xterm/src/core/input/keytab/keytab_record.dart';
-import 'package:xterm/src/core/input/keytab/keytab_token.dart';
+import 'package:yoxterm/src/core/input/keytab/keytab_parse.dart';
+import 'package:yoxterm/src/core/input/keytab/keytab_record.dart';
+import 'package:yoxterm/src/core/input/keytab/keytab_token.dart';
 
 KeytabToken token(KeytabTokenType type, [String value = '']) {
   return KeytabToken(type, value);

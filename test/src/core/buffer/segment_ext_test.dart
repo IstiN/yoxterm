@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/xterm.dart';
+import 'package:yoxterm/xterm.dart';
 
 void main() {
   final range = BufferRangeLine(CellOffset(0, 0), CellOffset(0, 0));

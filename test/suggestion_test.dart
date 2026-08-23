@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/suggestion.dart';
+import 'package:yoxterm/suggestion.dart';
 
 void main() {
   group('SuggestionPortal', () {

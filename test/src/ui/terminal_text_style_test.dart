@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/terminal_text_style.dart';
+import 'package:yoxterm/src/ui/terminal_text_style.dart';
 
 void main() {
   group('TerminalStyle defaults', () {

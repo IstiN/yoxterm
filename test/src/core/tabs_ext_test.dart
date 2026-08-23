@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/core/tabs.dart';
+import 'package:yoxterm/src/core/tabs.dart';
 
 void main() {
   group('TabStops defaults', () {

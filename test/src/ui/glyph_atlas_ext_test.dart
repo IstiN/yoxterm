@@ -1,7 +1,7 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/glyph_atlas.dart';
-import 'package:xterm/xterm.dart';
+import 'package:yoxterm/src/ui/glyph_atlas.dart';
+import 'package:yoxterm/xterm.dart';
 
 GlyphAtlas _atlas({
   int capacity = 256,

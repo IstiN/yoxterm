@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/xterm.dart';
+import 'package:yoxterm/xterm.dart';
 
 /// Minimal concrete [BufferRange] used to exercise the base class behavior
 /// that both [BufferRangeLine] and [BufferRangeBlock] override.

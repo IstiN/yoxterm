@@ -3,7 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:test/test.dart';
-import 'package:xterm/zmodem.dart';
+import 'package:yoxterm/zmodem.dart';
 import 'package:zmodem/zmodem.dart' hide ZModemFileInfo;
 
 /// Wires a [ZModemMux] to in-memory streams and records everything the mux

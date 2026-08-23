@@ -1,6 +1,6 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/core/input/keys.dart';
-import 'package:xterm/src/core/input/keytab/keytab.dart';
+import 'package:yoxterm/src/core/input/keys.dart';
+import 'package:yoxterm/src/core/input/keytab/keytab.dart';
 
 void main() {
   group('Keytab.parse()', () {

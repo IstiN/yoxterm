@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/base/event.dart';
+import 'package:yoxterm/src/base/event.dart';
 
 void main() {
   group('EventEmitter', () {

@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/utils/hash_values.dart';
+import 'package:yoxterm/src/utils/hash_values.dart';
 
 void main() {
   group('hashValues', () {

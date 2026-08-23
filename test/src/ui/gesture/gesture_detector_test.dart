@@ -1,7 +1,7 @@
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/gesture/gesture_detector.dart';
+import 'package:yoxterm/src/ui/gesture/gesture_detector.dart';
 
 void main() {
   Widget buildDetector({

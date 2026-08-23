@@ -1,5 +1,14 @@
 
-## xterm.dart
+## yoxterm
+
+> **yoxterm** is a performance-focused fork of
+> [xterm.dart](https://github.com/TerminalStudio/xterm.dart) (MIT, (c) xuty),
+> published as [`yoxterm`](https://pub.dev/packages/yoxterm). It tracks the
+> upstream API but adds glyph-atlas rendering, pooled paint operations and
+> parser fast paths developed for the [YoLoIT](https://github.com/IstiN/yoloit)
+> terminal workspace.
+
+
 
 <p>
     <a href="https://github.com/TerminalStudio/xterm.dart/actions/workflows/ci.yml">

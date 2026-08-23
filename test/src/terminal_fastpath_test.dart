@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/core.dart';
+import 'package:yoxterm/core.dart';
 
 /// Tests for the parser-bypass fast path in [Terminal.write]: chunks without
 /// ESC, C0 control characters or a dangling surrogate half are written to the

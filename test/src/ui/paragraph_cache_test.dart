@@ -1,6 +1,6 @@
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/paragraph_cache.dart';
+import 'package:yoxterm/src/ui/paragraph_cache.dart';
 
 void main() {
   const style = TextStyle(fontSize: 13, fontFamily: 'monospace');

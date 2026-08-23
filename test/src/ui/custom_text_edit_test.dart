@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/custom_text_edit.dart';
+import 'package:yoxterm/src/ui/custom_text_edit.dart';
 
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();

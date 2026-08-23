@@ -1,3 +1,10 @@
+## [4.0.0] - 2026-08-23
+* Initial `yoxterm` release — renamed fork of xterm.dart 4.0.0 (MIT, (c) xuty),
+  maintained at https://github.com/IstiN/yoxterm with a performance focus:
+  glyph-atlas rendering, pooled paint ops, observable listener fast paths,
+  parser fast path, output paint throttling, CRAP-score ratchet (crap4dart)
+  and 1280+ regression tests.
+
 ## [4.0.0] - 2024-02-27
 * Update for Flutter 3.19 [#190]. Thanks [@domesticmouse].
 * Fix designate charset logic [#186]. Thanks [@djnalluri].

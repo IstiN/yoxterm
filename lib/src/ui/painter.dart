@@ -2,10 +2,10 @@ import 'dart:ui';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 
-import 'package:xterm/src/ui/glyph_atlas.dart';
-import 'package:xterm/src/ui/palette_builder.dart';
-import 'package:xterm/src/ui/paragraph_cache.dart';
-import 'package:xterm/xterm.dart';
+import 'package:yoxterm/src/ui/glyph_atlas.dart';
+import 'package:yoxterm/src/ui/palette_builder.dart';
+import 'package:yoxterm/src/ui/paragraph_cache.dart';
+import 'package:yoxterm/xterm.dart';
 
 /// Encapsulates the logic for painting various terminal elements.
 class TerminalPainter {

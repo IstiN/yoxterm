@@ -1,10 +1,10 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/core/buffer/cell_offset.dart';
-import 'package:xterm/src/core/mouse/button.dart';
-import 'package:xterm/src/core/mouse/button_state.dart';
-import 'package:xterm/src/core/mouse/handler.dart';
-import 'package:xterm/src/core/mouse/mode.dart';
-import 'package:xterm/src/core/platform.dart';
+import 'package:yoxterm/src/core/buffer/cell_offset.dart';
+import 'package:yoxterm/src/core/mouse/button.dart';
+import 'package:yoxterm/src/core/mouse/button_state.dart';
+import 'package:yoxterm/src/core/mouse/handler.dart';
+import 'package:yoxterm/src/core/mouse/mode.dart';
+import 'package:yoxterm/src/core/platform.dart';
 
 import '../../../_fixture/fake_terminal_state.dart';
 

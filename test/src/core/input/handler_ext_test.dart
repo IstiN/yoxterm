@@ -1,8 +1,8 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/core/input/handler.dart';
-import 'package:xterm/src/core/input/keys.dart';
-import 'package:xterm/src/core/input/keytab/keytab.dart';
-import 'package:xterm/src/core/platform.dart';
+import 'package:yoxterm/src/core/input/handler.dart';
+import 'package:yoxterm/src/core/input/keys.dart';
+import 'package:yoxterm/src/core/input/keytab/keytab.dart';
+import 'package:yoxterm/src/core/platform.dart';
 
 import '../../../_fixture/fake_terminal_state.dart';
 

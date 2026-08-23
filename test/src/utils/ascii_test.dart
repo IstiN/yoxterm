@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/utils/ascii.dart';
+import 'package:yoxterm/src/utils/ascii.dart';
 
 void main() {
   group('Ascii.isNonPrintable', () {

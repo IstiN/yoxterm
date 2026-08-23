@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart' show ViewportOffset;
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/render.dart';
-import 'package:xterm/xterm.dart';
+import 'package:yoxterm/src/ui/render.dart';
+import 'package:yoxterm/xterm.dart';
 
 TerminalView _view(
   Terminal terminal, {

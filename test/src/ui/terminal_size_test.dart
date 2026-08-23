@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:xterm/src/ui/terminal_size.dart';
+import 'package:yoxterm/src/ui/terminal_size.dart';
 
 void main() {
   group('TerminalSize', () {

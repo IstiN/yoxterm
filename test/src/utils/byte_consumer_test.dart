@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/utils/byte_consumer.dart';
+import 'package:yoxterm/src/utils/byte_consumer.dart';
 
 void main() {
   late ByteConsumer consumer;

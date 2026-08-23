@@ -1,13 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:meta/meta.dart';
-import 'package:xterm/src/base/disposable.dart';
-import 'package:xterm/src/core/buffer/cell_offset.dart';
-import 'package:xterm/src/core/buffer/line.dart';
-import 'package:xterm/src/core/buffer/range.dart';
-import 'package:xterm/src/core/buffer/range_block.dart';
-import 'package:xterm/src/core/buffer/range_line.dart';
-import 'package:xterm/src/ui/pointer_input.dart';
-import 'package:xterm/src/ui/selection_mode.dart';
+import 'package:yoxterm/src/base/disposable.dart';
+import 'package:yoxterm/src/core/buffer/cell_offset.dart';
+import 'package:yoxterm/src/core/buffer/line.dart';
+import 'package:yoxterm/src/core/buffer/range.dart';
+import 'package:yoxterm/src/core/buffer/range_block.dart';
+import 'package:yoxterm/src/core/buffer/range_line.dart';
+import 'package:yoxterm/src/ui/pointer_input.dart';
+import 'package:yoxterm/src/ui/selection_mode.dart';
 
 class TerminalController with ChangeNotifier {
   TerminalController({

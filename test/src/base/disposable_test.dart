@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/base/disposable.dart';
+import 'package:yoxterm/src/base/disposable.dart';
 
 class _Owner with Disposable {}
 

@@ -1,5 +1,5 @@
 import 'package:test/test.dart';
-import 'package:xterm/src/core/input/keytab/keytab_escape.dart';
+import 'package:yoxterm/src/core/input/keytab/keytab_escape.dart';
 
 void main() {
   group('keytabUnescape()', () {
