@@ -1,3 +1,13 @@
+## [4.0.1] - 2026-08-23
+* Rewritten README: yoxterm badges (pub, CI, CRAP) and a benchmark table with
+  measured numbers (98.3 MB/s plain-text parse, ~35x fewer canvas ops per
+  htop frame, 49 us/frame paint under output flood).
+* Fix 3 analyzer infos: `withOpacity` -> `withValues`,
+  `OverlayPortal.targetsRootOverlay` -> `OverlayChildLocation.rootOverlay`,
+  drop an unnecessary import. Minimum Flutter is now 3.33.0.
+* Add CI workflow (analyze + tests + CRAP ratchet on macos-latest) and a
+  pre-commit hook enforcing the same gate locally.
+
 ## [4.0.0] - 2026-08-23
 * Initial `yoxterm` release — renamed fork of xterm.dart 4.0.0 (MIT, (c) xuty),
   maintained at https://github.com/IstiN/yoxterm with a performance focus:
