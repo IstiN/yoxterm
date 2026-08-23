@@ -113,6 +113,10 @@ class ByteConsumer {
 
   bool get isNotEmpty => _length != 0;
 
+  /// Whether a lone high surrogate from a previous [add] is waiting to be
+  /// combined with the next chunk. Not reflected in [length] / [isEmpty].
+  bool get hasPendingSurrogate => _pendingHighSurrogate != null;
+
   /// Unreferences data blocks that have been consumed. After calling this
   /// method, the consumer will not be able to roll back to consumed blocks.
   void unrefConsumedBlocks() {

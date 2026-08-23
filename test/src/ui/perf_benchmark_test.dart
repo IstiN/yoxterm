@@ -35,6 +35,35 @@ void main() {
       '(incl. scrollback recycling)',
     );
 
+    // ── 1b. Parser bypass fast path: plain-text flood without any control
+    // characters. Terminal.write now skips the parser for such chunks; the
+    // EscapeParser-driven terminal below is the pre-change baseline.
+    const plainLine =
+        'The quick brown fox jumps over the lazy dog 0123456789 !@#\$%^&*()  ';
+    final plainChunk = plainLine * 100;
+
+    final bypassTerminal = Terminal(maxLines: 1000);
+    final bypassSw = Stopwatch()..start();
+    for (var i = 0; i < iterations; i++) {
+      bypassTerminal.write(plainChunk);
+    }
+    bypassSw.stop();
+
+    final parserTerminal = Terminal(maxLines: 1000);
+    final referenceParser = EscapeParser(parserTerminal);
+    final parserOnlySw = Stopwatch()..start();
+    for (var i = 0; i < iterations; i++) {
+      referenceParser.write(plainChunk);
+    }
+    parserOnlySw.stop();
+
+    final plainMb = (plainChunk.length * iterations) / (1024 * 1024);
+    // ignore: avoid_print
+    print(
+      'parse plain: ${(plainMb / (bypassSw.elapsedMicroseconds / 1e6)).toStringAsFixed(1)} MB/s fast path vs '
+      '${(plainMb / (parserOnlySw.elapsedMicroseconds / 1e6)).toStringAsFixed(1)} MB/s parser only',
+    );
+
     // ── 2. Parse throughput with SGR colors (agent-output-like mix) ───────
     const coloredLine =
         '\x1b[32m✓\x1b[0m test_passes \x1b[90mtest/unit/foo_test.dart\x1b[0m \x1b[33m12ms\x1b[0m\r\n';

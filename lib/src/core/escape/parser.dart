@@ -25,6 +25,12 @@ class EscapeParser {
   /// End of sequence or character being processed. Useful for debugging.
   int get tokenEnd => _queue.totalConsumed;
 
+  /// Whether the parser is holding back input from previous [write] calls:
+  /// an incomplete escape sequence or the high half of a surrogate pair
+  /// split across chunks. While this is true, new input must go through the
+  /// parser so the held-back bytes are not reordered behind it.
+  bool get hasPendingInput => _queue.isNotEmpty || _queue.hasPendingSurrogate;
+
   void write(String chunk) {
     _queue.unrefConsumedBlocks();
     _queue.add(chunk);

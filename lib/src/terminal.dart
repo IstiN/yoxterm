@@ -234,8 +234,46 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   /// updates the states of the terminal and emits events such as [onBell] or
   /// [onTitleChange] when the escape sequences in [data] request it.
   void write(String data) {
+    // Fast path: if the chunk contains nothing the parser would dispatch on
+    // (no escape byte, no C0 control characters, no dangling surrogate half)
+    // and the parser isn't holding back bytes from a previous chunk, write
+    // directly to the buffer, bypassing the parser state machine. This is
+    // the common case for plain-text output floods.
+    if (!_parser.hasPendingInput && !_requiresParser(data)) {
+      // Keep _precedingCodepoint in sync so CSI n b (REP) still works after
+      // a fast-path write; writeChar would normally maintain it.
+      if (data.isNotEmpty) {
+        _precedingCodepoint = data.runes.last;
+      }
+      _buffer.write(data);
+      notifyListeners();
+      return;
+    }
     _parser.write(data);
     notifyListeners();
+  }
+
+  /// Whether [data] must go through the parser instead of the fast path in
+  /// [write]: any C0 control character (U+0000–U+001F, including ESC) or DEL
+  /// (U+007F). The parser maps BEL/BS/HT/LF/VT/FF/CR/SO/SI to handler
+  /// callbacks and drops the others, while [Buffer.write] would store them
+  /// literally as cells. A trailing lone high surrogate also requires the
+  /// parser so that [ByteConsumer] can stitch it together with the low half
+  /// arriving in the next chunk.
+  static bool _requiresParser(String data) {
+    for (var i = 0; i < data.length; i++) {
+      final c = data.codeUnitAt(i);
+      if (c < 0x20 || c == 0x7f) {
+        return true;
+      }
+    }
+    if (data.isNotEmpty) {
+      final last = data.codeUnitAt(data.length - 1);
+      if (last >= 0xD800 && last <= 0xDBFF) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /// Sends a key event to the underlying program.
