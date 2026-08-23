@@ -68,6 +68,27 @@ class TerminalPainter {
   final _atlasRects = Float32List(512 * 4);
   final _atlasColors = Int32List(512);
 
+  /// Cell column of each pending atlas sprite, parallel to [_atlasColors].
+  /// Only consumed when a line is recorded into [_linePaintCache].
+  final _atlasSpriteCols = Int32List(512);
+
+  /// Per-line replay cache for [paintLine]. Each entry holds the canvas ops a
+  /// line produced (parameterized by cell column, not absolute coordinates),
+  /// validated against [BufferLine.version] and the glyph atlas instance.
+  /// Unchanged lines are replayed without re-walking their cells.
+  final _linePaintCache = <BufferLine, _LinePaintCache>{};
+
+  /// Bounds [_linePaintCache] memory. On overflow the whole map is dropped
+  /// and rebuilt from misses — only visible lines are painted per frame, so
+  /// the steady-state size stays far below this.
+  static const _maxLinePaintCacheEntries = 1024;
+
+  /// Number of lines rebuilt (cache miss) in [paintLine] since this counter
+  /// was last reset. Tests use it to assert repaint work scales with the
+  /// number of changed lines, not with the number of visible lines.
+  @visibleForTesting
+  int debugLineBuildCount = 0;
+
   /// Paint used for atlas sprite batches. Bilinear sampling is exact for the
   /// dpr-snapped 1:1 texel mapping and smoother for fractional positions.
   final _atlasPaint = Paint()..filterQuality = FilterQuality.low;
@@ -102,6 +123,8 @@ class TerminalPainter {
     _theme = value;
     _colorPalette = PaletteBuilder(value).build();
     _paragraphCache.clear();
+    // Colors are baked into recorded line ops, so the replay cache must go.
+    _linePaintCache.clear();
   }
 
   Size _measureCharSize() {
@@ -147,6 +170,8 @@ class TerminalPainter {
   void _invalidateGlyphAtlas() {
     _glyphAtlas?.disposeAndClear();
     _glyphAtlas = null;
+    // Recorded sprite ops reference atlas tiles, so the replay cache must go.
+    _linePaintCache.clear();
   }
 
   /// Returns the atlas for the current configuration, creating it on first
@@ -282,9 +307,6 @@ class TerminalPainter {
     Offset offset,
     BufferLine line,
   ) {
-    final cellData = _reusableCellData;
-    final cellWidth = _cellSize.width;
-    final snappedY = _snap(offset.dy);
     // The atlas is only usable when the canvas raster scale matches the dpr
     // the tiles are (re)built for — otherwise snapped sprite positions no
     // longer land on texel boundaries and sampling would blur compared to
@@ -292,6 +314,122 @@ class TerminalPainter {
     // the implicit view reports a higher dpr, and board zoom applies a
     // scale on top of the dpr; both fall back to the paragraph path.
     final atlas = _atlasUsableOn(canvas) ? _atlas() : null;
+
+    // Replay the ops recorded for this line when neither the line content
+    // ([BufferLine.version]) nor the atlas configuration changed. Replay
+    // recomputes snapped coordinates from [offset], so the emitted canvas
+    // calls are identical to a fresh build. When [offset] itself is unchanged
+    // (the common idle/partial-damage frame) the baked coordinates recorded
+    // at build time are reused verbatim, skipping even the snapping math.
+    final version = line.version;
+    final cached = _linePaintCache[line];
+    if (cached != null &&
+        cached.version == version &&
+        identical(cached.atlas, atlas)) {
+      _replayLine(canvas, offset, _snap(offset.dy), cached);
+      return;
+    }
+    debugLineBuildCount++;
+    final ops = <_LinePaintOp>[];
+    _buildLine(canvas, offset, line, atlas, ops);
+    if (_linePaintCache.length >= _maxLinePaintCacheEntries) {
+      _linePaintCache.clear();
+    }
+    _linePaintCache[line] = _LinePaintCache(version, offset, atlas, ops);
+  }
+
+  /// Replays the ops recorded by [_buildLine] for an unchanged line.
+  void _replayLine(
+    Canvas canvas,
+    Offset offset,
+    double snappedY,
+    _LinePaintCache cache,
+  ) {
+    final cellWidth = _cellSize.width;
+    final atlas = cache.atlas;
+    // When the line is painted at the same offset it was recorded at, every
+    // snapped coordinate is identical — replay the baked geometry directly.
+    final sameOffset = offset == cache.offset;
+    for (final op in cache.ops) {
+      switch (op) {
+        case _BgRectOp():
+          canvas.drawRect(
+            sameOffset
+                ? op.rect
+                : Rect.fromLTRB(
+                    _snap(offset.dx + op.startCol * cellWidth),
+                    snappedY,
+                    _snap(offset.dx + op.endCol * cellWidth),
+                    snappedY + _cellSize.height,
+                  ),
+            _fillPaint
+              ..color = Color(op.colorArgb)
+              ..style = PaintingStyle.fill,
+          );
+        case _SpriteBatchOp():
+          final count = op.cols.length;
+          var transforms = op.transforms;
+          if (!sameOffset) {
+            final atlasScale = 1.0 / atlas!.devicePixelRatio;
+            for (var s = 0; s < count; s++) {
+              final o = s * 4;
+              _atlasTransforms[o] = atlasScale;
+              _atlasTransforms[o + 1] = 0;
+              _atlasTransforms[o + 2] =
+                  _snap(offset.dx + op.cols[s] * cellWidth);
+              _atlasTransforms[o + 3] = snappedY;
+            }
+            transforms =
+                Float32List.sublistView(_atlasTransforms, 0, count * 4);
+          }
+          canvas.drawRawAtlas(
+            atlas!.image!,
+            transforms,
+            op.rects,
+            op.colors,
+            BlendMode.modulate,
+            null,
+            _atlasPaint,
+          );
+        case _TextRunOp():
+          _paintTextRun(
+            canvas,
+            sameOffset
+                ? op.offset
+                : Offset(_snap(offset.dx + op.startCol * cellWidth), snappedY),
+            op.text,
+            op.flags,
+            op.foreground,
+            op.background,
+          );
+        case _CellOp():
+          final cellData = _reusableCellData
+            ..foreground = op.foreground
+            ..background = op.background
+            ..flags = op.flags
+            ..content = op.content;
+          final left =
+              sameOffset ? op.left : _snap(offset.dx + op.col * cellWidth);
+          final right = sameOffset
+              ? op.right
+              : _snap(offset.dx + (op.col + op.effectiveCols) * cellWidth);
+          paintCellForeground(canvas, Offset(left, snappedY), cellData, right);
+      }
+    }
+  }
+
+  /// Builds [line]'s sprite batches and paints them to [canvas] at [offset],
+  /// recording every emitted canvas call into [ops] for later replay.
+  void _buildLine(
+    Canvas canvas,
+    Offset offset,
+    BufferLine line,
+    GlyphAtlas? atlas,
+    List<_LinePaintOp> ops,
+  ) {
+    final cellData = _reusableCellData;
+    final cellWidth = _cellSize.width;
+    final snappedY = _snap(offset.dy);
     final atlasScale = atlas == null ? 0.0 : 1.0 / atlas.devicePixelRatio;
 
     var spriteCount = 0;
@@ -304,6 +442,20 @@ class TerminalPainter {
       if (spriteCount == 0) return;
       // Sprites only accumulate when the atlas served their tiles, so the
       // atlas and its image are non-null here.
+      ops.add(
+        _SpriteBatchOp(
+          Float32List.fromList(
+            Float32List.sublistView(_atlasRects, 0, spriteCount * 4),
+          ),
+          Int32List.fromList(Int32List.sublistView(_atlasColors, 0, spriteCount)),
+          Int32List.fromList(
+            Int32List.sublistView(_atlasSpriteCols, 0, spriteCount),
+          ),
+          Float32List.fromList(
+            Float32List.sublistView(_atlasTransforms, 0, spriteCount * 4),
+          ),
+        ),
+      );
       canvas.drawRawAtlas(
         atlas!.image!,
         Float32List.sublistView(_atlasTransforms, 0, spriteCount * 4),
@@ -329,15 +481,14 @@ class TerminalPainter {
       final paint = _fillPaint
         ..color = color
         ..style = PaintingStyle.fill;
-      canvas.drawRect(
-        Rect.fromLTRB(
-          _snap(offset.dx + bgRunStartCol * cellWidth),
-          snappedY,
-          _snap(offset.dx + endCol * cellWidth),
-          snappedY + _cellSize.height,
-        ),
-        paint,
+      final rect = Rect.fromLTRB(
+        _snap(offset.dx + bgRunStartCol * cellWidth),
+        snappedY,
+        _snap(offset.dx + endCol * cellWidth),
+        snappedY + _cellSize.height,
       );
+      ops.add(_BgRectOp(bgRunStartCol, endCol, color.toARGB32(), rect));
+      canvas.drawRect(rect, paint);
       // This rect covers the pending sprite cells, so their glyphs go next,
       // exactly like bg-then-fg per cell in the per-cell path.
       flushSprites();
@@ -356,10 +507,23 @@ class TerminalPainter {
     void flushTextRun(int endCol) {
       if (textRunFlags < 0) return;
       flushBackgroundRun(endCol);
+      final text = textRun.toString();
+      final runOffset =
+          Offset(_snap(offset.dx + textRunStartCol * cellWidth), snappedY);
+      ops.add(
+        _TextRunOp(
+          textRunStartCol,
+          text,
+          textRunFlags,
+          textRunForeground,
+          textRunBackground,
+          runOffset,
+        ),
+      );
       _paintTextRun(
         canvas,
-        Offset(_snap(offset.dx + textRunStartCol * cellWidth), snappedY),
-        textRun.toString(),
+        runOffset,
+        text,
         textRunFlags,
         textRunForeground,
         textRunBackground,
@@ -422,6 +586,7 @@ class TerminalPainter {
           color = color.withAlpha(128);
         }
         _atlasColors[spriteCount] = color.toARGB32();
+        _atlasSpriteCols[spriteCount] = i;
         spriteCount++;
       } else if (mergeable &&
           cellData.flags & (CellFlags.faint | CellFlags.italic) == 0) {
@@ -471,6 +636,18 @@ class TerminalPainter {
           // Paint this cell's background segment first, exactly like the
           // per-cell path does (bg then fg per cell).
           flushBackgroundRun(i + effectiveCols);
+          ops.add(
+            _CellOp(
+              i,
+              effectiveCols,
+              cellData.foreground,
+              cellData.background,
+              cellData.flags,
+              cellData.content,
+              cellLeft,
+              cellRight,
+            ),
+          );
           paintCellForeground(
             canvas,
             Offset(cellLeft, snappedY),
@@ -598,7 +775,6 @@ class TerminalPainter {
         color,
         actualWidth,
         actualHeight,
-        bold: cellFlags & CellFlags.bold != 0,
       )) {
         return;
       }
@@ -664,9 +840,8 @@ class TerminalPainter {
     int codePoint,
     Color color,
     double width,
-    double height, {
-    required bool bold,
-  }) {
+    double height,
+  ) {
     final paint = _fillPaint
       ..color = color
       ..style = PaintingStyle.fill;
@@ -947,4 +1122,97 @@ class TerminalPainter {
         return Color(colorValue | 0xFF000000);
     }
   }
+}
+
+/// A canvas operation recorded by [TerminalPainter.paintLine], parameterized
+/// by cell column rather than absolute coordinates so it can be replayed at
+/// any line offset with freshly snapped coordinates. Replaying a line's op
+/// list emits exactly the same canvas calls as rebuilding it.
+sealed class _LinePaintOp {
+  const _LinePaintOp();
+}
+
+/// A merged background rect covering columns [startCol]..[endCol] filled with
+/// [colorArgb]. [rect] is the baked, snapped geometry from recording time,
+/// reused verbatim when the line is replayed at the same offset.
+final class _BgRectOp extends _LinePaintOp {
+  const _BgRectOp(this.startCol, this.endCol, this.colorArgb, this.rect);
+
+  final int startCol;
+  final int endCol;
+  final int colorArgb;
+  final Rect rect;
+}
+
+/// A flushed [Canvas.drawRawAtlas] batch. [rects] are the baked texel rects
+/// and [transforms] the baked RSTransforms (both stable for the atlas
+/// instance and offset the batch was recorded against), [colors] the
+/// per-sprite tint, and [cols] the cell column of each sprite — used to
+/// recompute snapped positions when replaying at a different offset.
+final class _SpriteBatchOp extends _LinePaintOp {
+  const _SpriteBatchOp(this.rects, this.colors, this.cols, this.transforms);
+
+  final Float32List rects;
+  final Int32List colors;
+  final Int32List cols;
+  final Float32List transforms;
+}
+
+/// A merged run of same-style printable cells painted as a single paragraph.
+/// [offset] is the baked draw offset from recording time.
+final class _TextRunOp extends _LinePaintOp {
+  const _TextRunOp(
+    this.startCol,
+    this.text,
+    this.flags,
+    this.foreground,
+    this.background,
+    this.offset,
+  );
+
+  final int startCol;
+  final String text;
+  final int flags;
+  final int foreground;
+  final int background;
+  final Offset offset;
+}
+
+/// A cell painted individually (emoji, wide chars, box drawing, or a
+/// faint/italic cell when the atlas is unavailable) — replayed via
+/// [TerminalPainter.paintCellForeground]. [left] and [right] are the baked,
+/// snapped horizontal edges from recording time.
+final class _CellOp extends _LinePaintOp {
+  const _CellOp(
+    this.col,
+    this.effectiveCols,
+    this.foreground,
+    this.background,
+    this.flags,
+    this.content,
+    this.left,
+    this.right,
+  );
+
+  final int col;
+  final int effectiveCols;
+  final int foreground;
+  final int background;
+  final int flags;
+  final int content;
+  final double left;
+  final double right;
+}
+
+/// The recorded op list of one [BufferLine], valid only for the [BufferLine]
+/// [version] and [GlyphAtlas] instance it was built with. [offset] is the
+/// paint offset the ops were recorded at; replaying at the same offset reuses
+/// the baked geometry verbatim.
+final class _LinePaintCache {
+  const _LinePaintCache(this.version, this.offset, this.atlas, this.ops);
+
+  final int version;
+  final Offset offset;
+  final GlyphAtlas? atlas;
+  final List<_LinePaintOp> ops;
 }

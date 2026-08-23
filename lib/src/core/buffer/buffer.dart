@@ -123,14 +123,21 @@ class Buffer {
 
     final cellWidth = codePoint < 128 ? 1 : unicodeV11.wcwidth(codePoint);
     if (_cursorX >= terminal.viewWidth) {
-      index();
-      setCursorX(0);
       if (terminal.autoWrapMode) {
+        index();
+        setCursorX(0);
         currentLine.isWrapped = true;
+      } else {
+        // Auto-wrap is off: keep the cursor clamped at the last column so
+        // the character overwrites the cell there.
+        _cursorX = viewWidth - 1;
       }
     }
 
     final line = currentLine;
+    if (terminal.insertMode) {
+      line.insertCells(_cursorX, 1, terminal.cursor);
+    }
     line.setCell(_cursorX, codePoint, cellWidth, terminal.cursor);
 
     if (_cursorX < viewWidth) {
@@ -198,11 +205,11 @@ class Buffer {
     currentLine.eraseRange(_cursorX, viewWidth, terminal.cursor);
   }
 
-  /// Erases the line from the start of the line to the cursor, including the
-  /// cursor.
+  /// Erases the line from the start of the line through the cursor, including
+  /// the cell under the cursor (matches VT EL 1 and xterm.js).
   void eraseLineToCursor() {
     currentLine.isWrapped = false;
-    currentLine.eraseRange(0, _cursorX, terminal.cursor);
+    currentLine.eraseRange(0, _cursorX + 1, terminal.cursor);
   }
 
   /// Erases the line at the current cursor position.
@@ -360,11 +367,11 @@ class Buffer {
   /// Sets the vertical scrolling margin to [top] and [bottom].
   /// Both values must be between 0 and [viewHeight] - 1.
   void setVerticalMargins(int top, int bottom) {
-    _marginTop = top.clamp(0, viewHeight - 1);
-    _marginBottom = bottom.clamp(0, viewHeight - 1);
+    final marginTop = top.clamp(0, viewHeight - 1);
+    final marginBottom = bottom.clamp(0, viewHeight - 1);
 
-    _marginTop = min(_marginTop, _marginBottom);
-    _marginBottom = max(_marginTop, _marginBottom);
+    _marginTop = min(marginTop, marginBottom);
+    _marginBottom = max(marginTop, marginBottom);
   }
 
   bool get isInVerticalMargin {

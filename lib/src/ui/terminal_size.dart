@@ -20,5 +20,5 @@ class TerminalSize {
   }
 
   @override
-  int get hashCode => width.hashCode ^ height.hashCode;
+  int get hashCode => Object.hash(width, height);
 }

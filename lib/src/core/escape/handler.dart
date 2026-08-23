@@ -19,6 +19,10 @@ abstract class EscapeHandler {
 
   void shiftIn();
 
+  /// Handles an unmapped single-byte control character.
+  ///
+  /// NOTE: [EscapeParser] currently never calls this method — unmapped
+  /// single-byte controls are dispatched to [unkownEscape] instead.
   void unknownSBC(int char);
 
   /* ANSI sequence */

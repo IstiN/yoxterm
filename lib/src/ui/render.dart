@@ -338,8 +338,10 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
   }
 
-  /// Selects characters in the terminal that starts from [from] to [to]. At
-  /// least one cell is selected even if [from] and [to] are same.
+  /// Selects characters in the terminal that starts from [from] to [to].
+  /// When [to] is omitted, a zero-cell caret selection is created at [from].
+  /// When [to] is at or after [from], the end is extended by one cell, so at
+  /// least one cell is selected even if [from] and [to] are the same.
   void selectCharacters(Offset from, [Offset? to]) {
     final fromPosition = getCellOffset(from);
     if (to == null) {
@@ -636,7 +638,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     int firstLine,
     int lastLine,
   ) {
-    for (var highlight in _controller.highlights) {
+    for (var highlight in highlights) {
       final range = highlight.range?.normalized;
 
       if (range == null ||

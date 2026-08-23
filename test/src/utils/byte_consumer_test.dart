@@ -181,10 +181,15 @@ void main() {
       expect(consumer.consume(), 98);
     });
 
-    test('lone high surrogate is kept as-is', () {
+    test('trailing lone high surrogate is held back for the next chunk', () {
       consumer.add('\ud83d');
-      expect(consumer.length, 1);
+      expect(consumer.isEmpty, isTrue);
+      // The next chunk does not complete the pair: the surrogate is
+      // emitted as-is, followed by the new input.
+      consumer.add('x');
+      expect(consumer.length, 2);
       expect(consumer.consume(), 0xD83D);
+      expect(consumer.consume(), 120);
     });
 
     test('lone low surrogate is kept as-is', () {
@@ -200,13 +205,21 @@ void main() {
       expect(consumer.consume(), 120);
     });
 
-    test('pair split across two adds is NOT recombined', () {
-      // Documents a limitation: each add() combines surrogates within its
-      // own chunk only, so a pair split across writes stays split.
+    test('pair split across two adds is recombined', () {
+      // add() buffers a trailing lone high surrogate and prepends it to the
+      // next chunk, so a split pair is still combined.
       consumer.add('\ud83d');
+      expect(consumer.isEmpty, isTrue);
       consumer.add('\ude00');
-      expect(consumer.length, 2);
-      expect(consumer.consume(), 0xD83D);
+      expect(consumer.length, 1);
+      expect(consumer.consume(), 0x1F600);
+    });
+
+    test('reset discards a pending high surrogate', () {
+      consumer.add('\ud83d');
+      consumer.reset();
+      consumer.add('\ude00');
+      expect(consumer.length, 1);
       expect(consumer.consume(), 0xDE00);
     });
   });

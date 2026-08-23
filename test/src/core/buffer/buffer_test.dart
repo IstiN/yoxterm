@@ -247,23 +247,24 @@ void main() {
 
   group('Buffer line recycling', () {
     test('recycles scrolled-out lines when the buffer is full', () {
-      final terminal = Terminal(maxLines: 20);
+      // maxLines is clamped to at least the default view height (24).
+      final terminal = Terminal(maxLines: 24);
       terminal.resize(10, 5);
 
       // Fill the buffer exactly to capacity (no eviction yet).
-      for (var i = 0; i < 19; i++) {
+      for (var i = 0; i < 23; i++) {
         terminal.write('line$i\r\n');
       }
-      expect(terminal.buffer.lines.length, 20);
+      expect(terminal.buffer.lines.length, 24);
 
       final before = terminal.buffer.lines.toList();
 
-      // Scroll 20 more lines through the buffer.
-      for (var i = 19; i < 39; i++) {
+      // Scroll 24 more lines through the buffer.
+      for (var i = 23; i < 47; i++) {
         terminal.write('line$i\r\n');
       }
 
-      expect(terminal.buffer.lines.length, 20);
+      expect(terminal.buffer.lines.length, 24);
 
       // Every line in the buffer is a recycled instance from before.
       final after = terminal.buffer.lines.toList();
@@ -273,7 +274,7 @@ void main() {
 
       // Contents stay correct: oldest lines scrolled out, newest present.
       final text = terminal.buffer.getText();
-      expect(text, contains('line38'));
+      expect(text, contains('line46'));
       expect(text, isNot(contains('line0')));
       expect(text, isNot(contains('line1\n')));
     });

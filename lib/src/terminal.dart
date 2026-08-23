@@ -28,6 +28,11 @@ import 'package:xterm/src/utils/circular_buffer.dart';
 class Terminal with Observable implements TerminalState, EscapeHandler {
   /// The number of lines that the scrollback buffer can hold. If the buffer
   /// exceeds this size, the lines at the top of the buffer will be removed.
+  ///
+  /// The effective value is clamped to at least the initial [viewHeight]
+  /// (24 rows): the buffers must always be able to hold a full viewport,
+  /// otherwise the scrollback offset would go negative and indexing the line
+  /// buffer would throw.
   final int maxLines;
 
   /// Function that is called when the program requests the terminal to ring
@@ -71,7 +76,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   final Set<int>? wordSeparators;
 
   Terminal({
-    this.maxLines = 1000,
+    int maxLines = 1000,
     this.onBell,
     this.onTitleChange,
     this.onIconChange,
@@ -83,7 +88,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     this.onPrivateOSC,
     this.reflowEnabled = true,
     this.wordSeparators,
-  });
+  }) : maxLines = max(maxLines, _defaultViewHeight);
 
   late final _parser = EscapeParser(this);
 
@@ -115,7 +120,11 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
   int _viewWidth = 80;
 
-  int _viewHeight = 24;
+  int _viewHeight = _defaultViewHeight;
+
+  /// The number of rows in the viewport before the first [resize]. Also the
+  /// minimum effective [maxLines].
+  static const _defaultViewHeight = 24;
 
   final _cursorStyle = CursorStyle();
 
@@ -474,7 +483,7 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
   @override
   void setTapStop() {
-    _tabStops.isSetAt(_buffer.cursorX);
+    _tabStops.setAt(_buffer.cursorX);
   }
 
   @override

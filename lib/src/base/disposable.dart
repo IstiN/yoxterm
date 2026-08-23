@@ -20,6 +20,7 @@ mixin Disposable {
   }
 
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
     for (final disposable in _disposables) {
       disposable.dispose();
@@ -35,6 +36,7 @@ class _DisposeCallback with Disposable {
 
   @override
   void dispose() {
+    if (disposed) return;
     super.dispose();
     callback();
   }

@@ -41,7 +41,30 @@ int hashValues(
   Object? arg19 = _hashEnd,
   Object? arg20 = _hashEnd,
 ]) {
-  int result = 0;
+  // Mix the argument count into the seed so that, for example, an empty
+  // list and a list containing a single zero do not collide (combining a
+  // zero onto a zero seed is a Jenkins no-op).
+  var length = 2;
+  if (!identical(arg03, _hashEnd)) length++;
+  if (!identical(arg04, _hashEnd)) length++;
+  if (!identical(arg05, _hashEnd)) length++;
+  if (!identical(arg06, _hashEnd)) length++;
+  if (!identical(arg07, _hashEnd)) length++;
+  if (!identical(arg08, _hashEnd)) length++;
+  if (!identical(arg09, _hashEnd)) length++;
+  if (!identical(arg10, _hashEnd)) length++;
+  if (!identical(arg11, _hashEnd)) length++;
+  if (!identical(arg12, _hashEnd)) length++;
+  if (!identical(arg13, _hashEnd)) length++;
+  if (!identical(arg14, _hashEnd)) length++;
+  if (!identical(arg15, _hashEnd)) length++;
+  if (!identical(arg16, _hashEnd)) length++;
+  if (!identical(arg17, _hashEnd)) length++;
+  if (!identical(arg18, _hashEnd)) length++;
+  if (!identical(arg19, _hashEnd)) length++;
+  if (!identical(arg20, _hashEnd)) length++;
+
+  int result = length;
   result = _Jenkins.combine(result, arg01);
   result = _Jenkins.combine(result, arg02);
   if (!identical(arg03, _hashEnd)) {
@@ -103,7 +126,9 @@ int hashValues(
 }
 
 int hashList(Iterable<Object> arguments) {
-  int result = 0;
+  // Seed with the length so that the result stays in sync with [hashValues]
+  // and lists of different lengths do not collide on a zero seed.
+  int result = arguments.length;
   for (Object argument in arguments) {
     result = _Jenkins.combine(result, argument);
   }

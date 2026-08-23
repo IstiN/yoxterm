@@ -77,7 +77,9 @@ class ZModemMux {
       )
     ..stream
         .transform(Utf8Decoder(allowMalformed: true))
-        .listen(onTerminalInput);
+        // Resolve onTerminalInput lazily: it is usually assigned after the
+        // mux is created, so capturing it here would drop output forever.
+        .listen((data) => onTerminalInput?.call(data));
 
   /// Current ZModem session. If null, no session is active.
   ZModemCore? _session;
@@ -293,7 +295,7 @@ extension ListExtension on List<int> {
     if (other.length + start > length) {
       return null;
     }
-    for (var i = start; i < length - other.length; i++) {
+    for (var i = start; i <= length - other.length; i++) {
       if (this[i] == other[0]) {
         var found = true;
         for (var j = 1; j < other.length; j++) {

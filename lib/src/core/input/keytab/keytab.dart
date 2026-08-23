@@ -35,29 +35,38 @@ class Keytab {
     bool macos = false,
     // bool meta,
   }) {
+    // +AnyMod records are catch-alls: they are only used when no record
+    // that mentions its modifiers explicitly matches.
+    KeytabRecord? anyModifierFallback;
+
     for (var record in records) {
       if (record.key != key) {
         continue;
       }
 
+      // Explicit +/- modifiers are always checked, even when the record
+      // also sets AnyMod. AnyMod only relaxes the modifiers the record
+      // does not mention.
+      if (record.ctrl != null && record.ctrl != ctrl) {
+        continue;
+      }
+
+      if (record.shift != null && record.shift != shift) {
+        continue;
+      }
+
+      if (record.alt != null && record.alt != alt) {
+        continue;
+      }
+
+      var isAnyModifierCatchAll = false;
       if (record.anyModifier == true) {
         if (ctrl == false && alt == false && shift == false) {
           continue;
         }
+        isAnyModifierCatchAll = true;
       } else if (record.anyModifier == false) {
         if (ctrl != false || alt != false || shift != false) {
-          continue;
-        }
-      } else {
-        if (record.ctrl != null && record.ctrl != ctrl) {
-          continue;
-        }
-
-        if (record.shift != null && record.shift != shift) {
-          continue;
-        }
-
-        if (record.alt != null && record.alt != alt) {
           continue;
         }
       }
@@ -92,10 +101,15 @@ class Keytab {
         continue;
       }
 
+      if (isAnyModifierCatchAll) {
+        anyModifierFallback ??= record;
+        continue;
+      }
+
       return record;
     }
 
-    return null;
+    return anyModifierFallback;
   }
 
   @override

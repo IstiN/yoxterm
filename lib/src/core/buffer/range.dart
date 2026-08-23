@@ -40,7 +40,10 @@ abstract class BufferRange {
       return true;
     }
 
-    if (other is! BufferRange) {
+    // Ranges of different subtypes are never equal so that equality stays
+    // symmetric with the overrides in [BufferRangeLine] and
+    // [BufferRangeBlock].
+    if (other is! BufferRange || other.runtimeType != runtimeType) {
       return false;
     }
 

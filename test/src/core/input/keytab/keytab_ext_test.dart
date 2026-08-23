@@ -72,13 +72,46 @@ key Down : "\\EB"
       expect(keytab.find(TerminalKey.home, alt: true), isNull);
     });
 
-    test('+AnyMod ignores specific modifier values', () {
-      // AnyMod is exclusive with specific modifiers in find(): when it is
-      // set, the ctrl/shift/alt fields of the record are not consulted.
+    test('+AnyMod relaxes modifiers the record does not mention', () {
+      // The record mentions no specific modifier, so AnyMod relaxes all of
+      // them: any non-empty modifier combination matches.
       final keytab = Keytab.parse(r'key Home +AnyMod : "X"');
       expect(
         keytab.find(TerminalKey.home, ctrl: true, shift: true, alt: true),
         isNotNull,
+      );
+    });
+
+    test('explicit -Shift is honored even when +AnyMod is set', () {
+      final keytab = Keytab.parse(r'key Up -Shift+AnyMod : "X"');
+      expect(keytab.find(TerminalKey.arrowUp, ctrl: true), isNotNull);
+      expect(keytab.find(TerminalKey.arrowUp, shift: true), isNull);
+    });
+
+    test('explicit +Control is honored even when +AnyMod is set', () {
+      final keytab = Keytab.parse(r'key Up +Control+AnyMod : "X"');
+      expect(
+        keytab.find(TerminalKey.arrowUp, ctrl: true, shift: true),
+        isNotNull,
+      );
+      expect(keytab.find(TerminalKey.arrowUp, shift: true), isNull);
+    });
+
+    test('+AnyMod records are a fallback for more specific records', () {
+      // Konsole semantics: a record that mentions its modifiers explicitly
+      // wins over a +AnyMod catch-all, even when the catch-all is declared
+      // earlier in the keytab.
+      final keytab = Keytab.parse('''
+key Up +AnyMod : "any"
+key Up +Shift : "shift"
+''');
+      expect(
+        keytab.find(TerminalKey.arrowUp, ctrl: true)!.action.unescapedValue(),
+        'any',
+      );
+      expect(
+        keytab.find(TerminalKey.arrowUp, shift: true)!.action.unescapedValue(),
+        'shift',
       );
     });
 
@@ -186,10 +219,28 @@ key Up : scrollLineUp
 
       expect(lines, hasLength(3));
       expect(lines[0], 'keyboard "test"');
-      expect(lines[1], 'Tab -Shift : "\\t"');
+      expect(lines[1], 'key Tab -Shift : "\\t"');
       // Note the double space: the key name is always followed by a space
       // even when no modes are present.
-      expect(lines[2], 'Up  : scrollLineUp');
+      expect(lines[2], 'key Up  : scrollLineUp');
+    });
+
+    test('output can be parsed back into an equivalent keytab', () {
+      final keytab = Keytab.parse('''
+keyboard "test"
+key Tab -Shift : "\\t"
+key Up +Shift-AppScreen : scrollLineUp
+key Home +AnyMod : "\\E[1;*H"
+''');
+
+      final reparsed = Keytab.parse(keytab.toString());
+
+      expect(reparsed.name, keytab.name);
+      expect(reparsed.records, hasLength(keytab.records.length));
+      for (var i = 0; i < keytab.records.length; i++) {
+        expect(reparsed.records[i].key, keytab.records[i].key);
+        expect(reparsed.records[i].toString(), keytab.records[i].toString());
+      }
     });
   });
 }

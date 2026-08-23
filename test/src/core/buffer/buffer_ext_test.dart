@@ -109,13 +109,16 @@ void main() {
       expect(terminal.buffer.cursorY, 1);
     });
 
-    test('does not mark the continuation line when auto-wrap is off', () {
+    test('with auto-wrap off the cursor stays at the last column and overwrites',
+        () {
       final terminal = createTerminal(width: 4);
       terminal.setAutoWrapMode(false);
 
       terminal.buffer.write('ABCDE');
 
-      expect(terminal.buffer.lines[1].getText(), 'E');
+      // 'E' overwrites the last cell instead of flowing to the next line.
+      expect(terminal.buffer.lines[0].getText(), 'ABCE');
+      expect(terminal.buffer.lines[1].getText(), '');
       expect(terminal.buffer.lines[1].isWrapped, isFalse);
     });
 
@@ -215,11 +218,11 @@ void main() {
       terminal.buffer.eraseDisplayToCursor();
 
       expect(terminal.buffer.lines[0].getText(), '');
-      // Note: eraseLineToCursor erases [0, cursorX), so the cell under the
-      // cursor itself is kept even though the doc comment says "including
-      // the cursor".
-      expect(terminal.buffer.lines[1].getText(), '56');
+      // eraseLineToCursor erases [0, cursorX], so the cell under the cursor
+      // is erased too.
+      expect(terminal.buffer.lines[1].getText(), '6');
       expect(terminal.buffer.lines[1].getCodePoint(0), 0);
+      expect(terminal.buffer.lines[1].getCodePoint(1), 0);
       expect(terminal.buffer.lines[2].getText(), '789');
     });
 
@@ -245,7 +248,7 @@ void main() {
       expect(terminal.buffer.lines[0].getText(), 'AB');
     });
 
-    test('eraseLineToCursor erases from the line start to before the cursor',
+    test('eraseLineToCursor erases from the line start through the cursor',
         () {
       final terminal = createTerminal();
       terminal.buffer.write('ABCDEF');
@@ -253,7 +256,7 @@ void main() {
       terminal.buffer.setCursorX(3);
       terminal.buffer.eraseLineToCursor();
 
-      expect(terminal.buffer.lines[0].getText(), 'DEF');
+      expect(terminal.buffer.lines[0].getText(), 'EF');
     });
 
     test('eraseLine erases the whole line and clears the wrap flag', () {
@@ -569,18 +572,15 @@ void main() {
   });
 
   group('Buffer vertical margins', () {
-    test('top greater than bottom collapses both margins to the bottom', () {
+    test('top greater than bottom swaps the margins', () {
       final terminal = createTerminal(height: 5);
 
       terminal.setMargins(3, 1);
 
-      // Documents current behavior: setVerticalMargins assigns
-      // _marginTop = min(top, bottom) first and then computes
-      // _marginBottom = max(_marginTop, _marginBottom) from the already
-      // overwritten _marginTop, so instead of swapping to (1, 3) both
-      // margins collapse to (1, 1).
+      // The margins are normalized by swapping them, so setMargins(3, 1)
+      // results in the scroll region (1, 3).
       expect(terminal.buffer.marginTop, 1);
-      expect(terminal.buffer.marginBottom, 1);
+      expect(terminal.buffer.marginBottom, 3);
     });
 
     test('clamps margins to the viewport', () {

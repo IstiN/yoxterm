@@ -48,7 +48,7 @@ void main() {
       expect(terminal.insertMode, isFalse);
     });
 
-    test('insert mode flag is tracked (currently not applied to writes)', () {
+    test('insert mode shifts existing text right instead of overwriting', () {
       final terminal = Terminal();
 
       terminal.write('abc');
@@ -56,10 +56,7 @@ void main() {
       terminal.write('\x1b[4h'); // insert mode on
       terminal.write('X');
 
-      // NOTE: Buffer.writeChar does not implement insert mode, so 'X'
-      // overwrites 'a' instead of shifting the line. This documents the
-      // current behavior.
-      expect(terminal.buffer.lines[0].toString(), 'Xbc');
+      expect(terminal.buffer.lines[0].toString(), 'Xabc');
     });
 
     test('line feed mode set/reset via CSI 20 h/l', () {
@@ -102,20 +99,25 @@ void main() {
       expect(terminal.cursorKeysMode, isFalse);
     });
 
-    test('app keypad mode changes arrow key output', () {
+    test('app keypad mode does not change arrow key output', () {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);
 
       terminal.keyInput(TerminalKey.arrowUp);
       expect(output, ['\x1b[A']);
 
+      // DECCKM (application cursor keys), not app keypad mode, drives arrows.
       terminal.write('\x1b=');
       terminal.keyInput(TerminalKey.arrowUp);
-      expect(output, ['\x1b[A', '\x1bOA']);
+      expect(output, ['\x1b[A', '\x1b[A']);
 
-      terminal.write('\x1b>');
+      terminal.write('\x1b[?1h');
       terminal.keyInput(TerminalKey.arrowUp);
-      expect(output, ['\x1b[A', '\x1bOA', '\x1b[A']);
+      expect(output, ['\x1b[A', '\x1b[A', '\x1bOA']);
+
+      terminal.write('\x1b[?1l');
+      terminal.keyInput(TerminalKey.arrowUp);
+      expect(output, ['\x1b[A', '\x1b[A', '\x1bOA', '\x1b[A']);
     });
 
     test('reverse display mode set/reset', () {
@@ -149,18 +151,17 @@ void main() {
       expect(terminal.autoWrapMode, isTrue);
     });
 
-    test('auto wrap disabled drops characters past the last column', () {
+    test('auto wrap disabled overwrites the last column', () {
       final terminal = Terminal();
       terminal.resize(10, 5);
 
       terminal.write('\x1b[?7l');
       terminal.write('0123456789ABCDEF');
 
-      // NOTE: characters still flow to the next line (Buffer.writeChar only
-      // skips marking the line as wrapped when autoWrapMode is off), so this
-      // documents the current behavior.
-      expect(terminal.buffer.lines[0].toString(), '0123456789');
-      expect(terminal.buffer.lines[1].toString(), 'ABCDEF');
+      // The cursor stays clamped at the last column; each character past the
+      // line width overwrites the cell there.
+      expect(terminal.buffer.lines[0].toString(), '012345678F');
+      expect(terminal.buffer.lines[1].toString(), '');
       expect(terminal.buffer.lines[1].isWrapped, isFalse);
     });
 
@@ -579,8 +580,8 @@ void main() {
       terminal.write('\x1b[5;10H'); // row 5, col 10 (1-based)
       terminal.write('\x1b[6n');
 
-      // The emitter reports the raw 0-based buffer coordinates.
-      expect(output, ['\x1b[4;9R']);
+      // The emitter reports 1-based coordinates per the CPR spec.
+      expect(output, ['\x1b[5;10R']);
     });
 
     test('terminal size report', () {
@@ -688,8 +689,8 @@ void main() {
         CellOffset(10, 10),
       );
 
-      // button ' ' (32+0), col '+' (32+11), row ',' (32+11+1)
-      expect(output, ['\x1B[M +,']);
+      // button ' ' (32+0), col '+' (32+11), row '+' (32+11)
+      expect(output, ['\x1B[M ++']);
     });
 
     test('reports with SGR encoding (1-based coordinates)', () {
@@ -729,9 +730,8 @@ void main() {
         CellOffset(0, 0),
       );
 
-      // Wheel button ids in this implementation are 68/69 (the standard
-      // 64/65 shifted by 4).
-      expect(output, ['\x1b[<68;1;1M', '\x1b[<69;1;1M']);
+      // Standard wheel button ids 64/65 (SGR).
+      expect(output, ['\x1b[<64;1;1M', '\x1b[<65;1;1M']);
     });
 
     test('works with a custom mouse handler', () {
@@ -770,6 +770,17 @@ void main() {
   });
 
   group('Terminal.scrollback', () {
+    test('maxLines smaller than the view height is clamped to the view height',
+        () {
+      final terminal = Terminal(maxLines: 4);
+
+      // The buffer must always be able to hold a full viewport (24 rows by
+      // default), otherwise the scrollback offset goes negative.
+      expect(terminal.maxLines, 24);
+      expect(() => terminal.write('hello'), returnsNormally);
+      expect(terminal.buffer.lines[0].toString(), startsWith('hello'));
+    });
+
     test('maxLines limits the total buffer height', () {
       final terminal = Terminal(maxLines: 40);
 
@@ -837,6 +848,18 @@ void main() {
       // No stops left: the cursor goes to the last column and enters
       // pending-wrap state.
       expect(terminal.buffer.cursorX, terminal.viewWidth - 1);
+    });
+
+    test('ESC H sets a tab stop under the cursor', () {
+      final terminal = Terminal();
+
+      terminal.write('\x1b[3g'); // clear all tab stops
+      terminal.write('\x1b[4G'); // move to column 3 (0-based)
+      terminal.write('\x1bH'); // set a tab stop under the cursor
+      terminal.write('\x1b[G'); // back to column 0
+
+      terminal.write('\t');
+      expect(terminal.buffer.cursorX, 3);
     });
   });
 

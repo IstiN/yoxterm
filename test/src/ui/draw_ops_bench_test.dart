@@ -105,4 +105,40 @@ void main() {
     expect(merged.paragraphs, lessThan(100),
         reason: 'ASCII paragraphs should be replaced by atlas batches');
   });
+
+  test('replayed lines emit the same canvas calls as fresh builds', () {
+    final terminal = Terminal();
+    terminal.write(TestFixtures.htop_80x25_3s());
+
+    final painter = TerminalPainter(
+      theme: TerminalThemes.defaultTheme,
+      textStyle: const TerminalStyle(fontSize: 13),
+      textScaler: TextScaler.noScaling,
+    );
+    painter.debugDevicePixelRatio = 1.0;
+
+    // First pass builds (cache miss), second pass at the same offsets replays
+    // the recorded ops, third pass at shifted offsets replays with recomputed
+    // (re-snapped) coordinates. All three must emit identical op counts.
+    final built = _CountingCanvas();
+    final replayedSame = _CountingCanvas();
+    final replayedShifted = _CountingCanvas();
+    final lines = terminal.buffer.lines;
+    for (var li = 0; li < lines.length; li++) {
+      painter.paintLine(built, Offset(0, li * 16.0), lines[li]);
+    }
+    expect(painter.debugLineBuildCount, lines.length);
+    for (var li = 0; li < lines.length; li++) {
+      painter.paintLine(replayedSame, Offset(0, li * 16.0), lines[li]);
+      painter.paintLine(replayedShifted, Offset(1.5, li * 16.0 + 0.5), lines[li]);
+    }
+    expect(painter.debugLineBuildCount, lines.length,
+        reason: 'second and third passes must be pure replays');
+
+    int opsOf(_CountingCanvas c) => c.rects + c.paragraphs + c.atlasCalls;
+    expect(opsOf(replayedSame), opsOf(built));
+    expect(replayedSame.atlasSprites, built.atlasSprites);
+    expect(opsOf(replayedShifted), opsOf(built));
+    expect(replayedShifted.atlasSprites, built.atlasSprites);
+  });
 }

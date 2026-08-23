@@ -61,20 +61,20 @@ void main() {
 
   group('KeytabRecord.toString()', () {
     test('key name without modes or action decoration', () {
-      expect(record().toString(), 'Tab  : "X"');
+      expect(record().toString(), 'key Tab  : "X"');
     });
 
     test('positive modes are prefixed with +', () {
       expect(
         record(shift: true).toString(),
-        'Tab +Shift : "X"',
+        'key Tab +Shift : "X"',
       );
     });
 
     test('negative modes are prefixed with -', () {
       expect(
         record(shift: false).toString(),
-        'Tab -Shift : "X"',
+        'key Tab -Shift : "X"',
       );
     });
 
@@ -95,7 +95,7 @@ void main() {
 
       expect(
         text,
-        'Tab '
+        'key Tab '
         '+Alt-Control+Shift-AnyMod+Ansi-AppScreen+KeyPad-AppCuKeys'
         '+AppKeyPad-NewLine+Mac'
         ' : "X"',
@@ -110,7 +110,7 @@ void main() {
         shift: true,
       ).toString();
 
-      expect(text, 'Up +Shift : scrollLineUp');
+      expect(text, 'key Up +Shift : scrollLineUp');
     });
   });
 }

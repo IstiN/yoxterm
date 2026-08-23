@@ -130,4 +130,84 @@ void main() {
       'paint flood (atlas hit, layout miss): ${(floodSw.elapsedMicroseconds / coldFrames).toStringAsFixed(0)} µs/frame',
     );
   });
+
+  test('perf benchmark: partial damage rebuild scales with changed lines', () {
+    // htop-like steady state: a full-screen TUI repaints every frame, but
+    // only a couple of lines actually change (clock, load average, cursor).
+    // The per-line replay cache must confine rebuild work to those lines.
+    final terminal = Terminal();
+    terminal.write(TestFixtures.htop_80x25_3s());
+
+    final painter = TerminalPainter(
+      theme: TerminalThemes.defaultTheme,
+      textStyle: const TerminalStyle(fontSize: 13),
+      textScaler: TextScaler.noScaling,
+    );
+    painter.debugDevicePixelRatio = 1.0;
+    final lines = terminal.buffer.lines;
+
+    void paintFrame(Canvas canvas) {
+      for (var li = 0; li < lines.length; li++) {
+        painter.paintLine(canvas, Offset(0, li * 16.0), lines[li]);
+      }
+    }
+
+    void paintRecorded() {
+      final recorder = PictureRecorder();
+      paintFrame(Canvas(recorder));
+      recorder.endRecording().dispose();
+    }
+
+    // Frame 1 builds every line.
+    paintRecorded();
+    expect(painter.debugLineBuildCount, lines.length,
+        reason: 'first frame must build every line');
+
+    // Idle frame (nothing changed — the cursor-blink repaint case, where only
+    // the cursor overlay moves and no line content changes): zero rebuilds.
+    painter.debugLineBuildCount = 0;
+    const idleFrames = 300;
+    final idleSw = Stopwatch()..start();
+    for (var f = 0; f < idleFrames; f++) {
+      paintRecorded();
+    }
+    idleSw.stop();
+    expect(painter.debugLineBuildCount, 0,
+        reason: 'unchanged lines must be replayed, not rebuilt');
+    // ignore: avoid_print
+    print(
+      'paint idle (all replay): ${(idleSw.elapsedMicroseconds / idleFrames).toStringAsFixed(0)} µs/frame '
+      'for ${lines.length} lines',
+    );
+
+    // Partial damage: 2 of 24 lines change per frame (htop clock/status row),
+    // simulated by real cell writes. Only the damaged lines may be rebuilt.
+    const damagedA = 3;
+    const damagedB = 17;
+    var tick = 0;
+    void damageTwoLines() {
+      tick++;
+      final char = 0x30 + (tick % 10); // '0'..'9'
+      lines[damagedA].setCell(70, char, 1, CursorStyle.empty);
+      lines[damagedB].setCell(70, char, 1, CursorStyle.empty);
+    }
+
+    damageTwoLines();
+    painter.debugLineBuildCount = 0;
+    paintRecorded();
+    expect(painter.debugLineBuildCount, 2,
+        reason: 'rebuild work must scale with changed lines, not total lines');
+
+    const partialFrames = 300;
+    final partialSw = Stopwatch()..start();
+    for (var f = 0; f < partialFrames; f++) {
+      damageTwoLines();
+      paintRecorded();
+    }
+    partialSw.stop();
+    // ignore: avoid_print
+    print(
+      'paint partial damage (2/${lines.length} lines): ${(partialSw.elapsedMicroseconds / partialFrames).toStringAsFixed(0)} µs/frame',
+    );
+  });
 }

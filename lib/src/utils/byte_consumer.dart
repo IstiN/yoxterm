@@ -11,9 +11,19 @@ class ByteConsumer {
 
   var _totalConsumed = 0;
 
+  /// A lone high surrogate that ended a previous chunk. It is prepended to
+  /// the next chunk so that a surrogate pair split across two [add] calls is
+  /// still recombined.
+  int? _pendingHighSurrogate;
+
   void add(String data) {
     if (data.isEmpty) return;
-    final units = data.codeUnits;
+    var units = data.codeUnits;
+    final pending = _pendingHighSurrogate;
+    if (pending != null) {
+      _pendingHighSurrogate = null;
+      units = [pending, ...units];
+    }
     var hasSurrogate = false;
     for (var i = 0; i < units.length; i++) {
       final unit = units[i];
@@ -31,16 +41,24 @@ class ByteConsumer {
     final runes = <int>[];
     for (var i = 0; i < units.length; i++) {
       final unit = units[i];
-      if (unit >= 0xD800 && unit <= 0xDBFF && i + 1 < units.length) {
-        final low = units[i + 1];
-        if (low >= 0xDC00 && low <= 0xDFFF) {
-          runes.add(0x10000 + ((unit & 0x3FF) << 10) + (low & 0x3FF));
-          i++;
+      if (unit >= 0xD800 && unit <= 0xDBFF) {
+        if (i + 1 < units.length) {
+          final low = units[i + 1];
+          if (low >= 0xDC00 && low <= 0xDFFF) {
+            runes.add(0x10000 + ((unit & 0x3FF) << 10) + (low & 0x3FF));
+            i++;
+            continue;
+          }
+        } else {
+          // A trailing lone high surrogate may be the first half of a pair
+          // that is completed by the next chunk. Hold it back.
+          _pendingHighSurrogate = unit;
           continue;
         }
       }
       runes.add(unit);
     }
+    if (runes.isEmpty) return;
     _queue.addLast(runes);
     _length += runes.length;
   }
@@ -108,6 +126,7 @@ class ByteConsumer {
     _currentOffset = 0;
     _totalConsumed = 0;
     _length = 0;
+    _pendingHighSurrogate = null;
   }
 }
 

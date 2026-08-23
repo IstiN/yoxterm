@@ -173,17 +173,17 @@ class EscapeParser {
     return true;
   }
 
-  /// `ESC >` Reset Application Keypad Mode (DECKPNM)
+  /// `ESC =` Set Application Keypad Mode (DECKPAM)
   ///
-  /// https://terminalguide.namepad.de/seq/a_esc_x3c_greater_than/
+  /// https://terminalguide.namepad.de/seq/a_esc_x3d_equals/
   bool _escHandleSetAppKeypadMode() {
     handler.setAppKeypadMode(true);
     return true;
   }
 
-  /// `ESC =` Set Application Keypad Mode (DECKPAM)
+  /// `ESC >` Reset Application Keypad Mode (DECKPNM)
   ///
-  /// https://terminalguide.namepad.de/seq/a_esc_x3d_equals/
+  /// https://terminalguide.namepad.de/seq/a_esc_x3c_greater_than/
   bool _escHandleResetAppKeypadMode() {
     handler.setAppKeypadMode(false);
     return true;
@@ -346,6 +346,7 @@ class EscapeParser {
 
     if (_csi.params.isNotEmpty) {
       y = _csi.params[0];
+      if (y == 0) y = 1;
     }
 
     handler.setCursorY(y - 1);
@@ -361,7 +362,13 @@ class EscapeParser {
     if (_csi.params.length == 2) {
       row = _csi.params[0];
       col = _csi.params[1];
+    } else if (_csi.params.length == 1) {
+      // A single param specifies the row; the column defaults to 1.
+      row = _csi.params[0];
     }
+
+    if (row == 0) row = 1;
+    if (col == 0) col = 1;
 
     handler.setCursor(col - 1, row - 1);
   }
@@ -497,21 +504,9 @@ class EscapeParser {
           handler.setForegroundColor16(NamedColor.white);
           continue;
         case 38:
-          final mode = params[i + 1];
-          switch (mode) {
-            case 2:
-              final r = params[i + 2];
-              final g = params[i + 3];
-              final b = params[i + 4];
-              handler.setForegroundColorRgb(r, g, b);
-              i += 4;
-              break;
-            case 5:
-              final index = params[i + 2];
-              handler.setForegroundColor256(index);
-              i += 2;
-              break;
-          }
+          final consumedFg = _consumeExtendedColor(params, i, foreground: true);
+          if (consumedFg < 0) return;
+          i += consumedFg;
           continue;
         case 39:
           handler.resetForeground();
@@ -542,21 +537,9 @@ class EscapeParser {
           handler.setBackgroundColor16(NamedColor.white);
           continue;
         case 48:
-          final mode = params[i + 1];
-          switch (mode) {
-            case 2:
-              final r = params[i + 2];
-              final g = params[i + 3];
-              final b = params[i + 4];
-              handler.setBackgroundColorRgb(r, g, b);
-              i += 4;
-              break;
-            case 5:
-              final index = params[i + 2];
-              handler.setBackgroundColor256(index);
-              i += 2;
-              break;
-          }
+          final consumedBg = _consumeExtendedColor(params, i, foreground: false);
+          if (consumedBg < 0) return;
+          i += consumedBg;
           continue;
         case 49:
           handler.resetBackground();
@@ -617,6 +600,45 @@ class EscapeParser {
           continue;
       }
     }
+  }
+
+  /// Consumes the extended color spec (256-color or RGB) following an
+  /// SGR 38/48 parameter at index [i] in [params].
+  ///
+  /// Returns the number of extra params consumed (0 for an unknown color
+  /// mode, which leaves the mode to be interpreted as a regular SGR param),
+  /// or -1 for a truncated sequence — the caller aborts the whole SGR in
+  /// that case instead of indexing past the parameter list.
+  int _consumeExtendedColor(
+    List<int> params,
+    int i, {
+    required bool foreground,
+  }) {
+    if (i + 1 >= params.length) return -1;
+
+    switch (params[i + 1]) {
+      case 2:
+        if (i + 4 >= params.length) return -1;
+        final r = params[i + 2];
+        final g = params[i + 3];
+        final b = params[i + 4];
+        if (foreground) {
+          handler.setForegroundColorRgb(r, g, b);
+        } else {
+          handler.setBackgroundColorRgb(r, g, b);
+        }
+        return 4;
+      case 5:
+        if (i + 2 >= params.length) return -1;
+        final index = params[i + 2];
+        if (foreground) {
+          handler.setForegroundColor256(index);
+        } else {
+          handler.setBackgroundColor256(index);
+        }
+        return 2;
+    }
+    return 0;
   }
 
   /// `ESC [ Ps n` Device Status Report [Dispatch] (DSR)
@@ -854,6 +876,7 @@ class EscapeParser {
 
     if (_csi.params.isNotEmpty) {
       amount = _csi.params[0];
+      if (amount == 0) amount = 1;
     }
 
     handler.insertLines(amount);
@@ -867,6 +890,7 @@ class EscapeParser {
 
     if (_csi.params.isNotEmpty) {
       amount = _csi.params[0];
+      if (amount == 0) amount = 1;
     }
 
     handler.deleteLines(amount);
@@ -880,6 +904,7 @@ class EscapeParser {
 
     if (_csi.params.isNotEmpty) {
       amount = _csi.params[0];
+      if (amount == 0) amount = 1;
     }
 
     handler.deleteChars(amount);
@@ -893,6 +918,7 @@ class EscapeParser {
 
     if (_csi.params.isNotEmpty) {
       amount = _csi.params[0];
+      if (amount == 0) amount = 1;
     }
 
     handler.scrollUp(amount);
@@ -906,6 +932,7 @@ class EscapeParser {
 
     if (_csi.params.isNotEmpty) {
       amount = _csi.params[0];
+      if (amount == 0) amount = 1;
     }
 
     handler.scrollDown(amount);
@@ -919,6 +946,7 @@ class EscapeParser {
 
     if (_csi.params.isNotEmpty) {
       amount = _csi.params[0];
+      if (amount == 0) amount = 1;
     }
 
     handler.eraseChars(amount);
@@ -936,6 +964,7 @@ class EscapeParser {
 
     if (_csi.params.isNotEmpty) {
       amount = _csi.params[0];
+      if (amount == 0) amount = 1;
     }
 
     handler.insertBlankChars(amount);
@@ -1108,6 +1137,12 @@ class EscapeParser {
 
         if (_queue.consume() == Ascii.backslash) {
           _osc.add(param.toString());
+        } else {
+          // ESC followed by anything else still terminates the OSC. Emit the
+          // pending parameter and push the character back so it is
+          // re-processed as regular input.
+          _osc.add(param.toString());
+          _queue.rollback();
         }
 
         return true;

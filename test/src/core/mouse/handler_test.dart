@@ -205,11 +205,11 @@ void main() {
       final state = stateWith(mouseMode: MouseMode.upDownScroll);
       expect(
         handler(event(state: state, button: TerminalMouseButton.wheelUp)),
-        '\x1b[<68;1;1M',
+        '\x1b[<64;1;1M',
       );
       expect(
         handler(event(state: state, button: TerminalMouseButton.wheelDown)),
-        '\x1b[<69;1;1M',
+        '\x1b[<65;1;1M',
       );
     });
 

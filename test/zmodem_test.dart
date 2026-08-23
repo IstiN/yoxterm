@@ -105,12 +105,11 @@ void main() {
       expect([1, 2, 9, 1, 2].listIndexOf([1, 2, 3]), isNull);
     });
 
-    test('a pattern starting at the last possible position is missed', () {
-      // Documents a pre-existing off-by-one: the scan loop uses
-      // `i < length - other.length` instead of `<=`, so a pattern that
-      // ends exactly at the end of the list is never found.
-      expect([9, 1, 2].listIndexOf([1, 2]), isNull);
-      expect([1, 2].listIndexOf([1, 2]), isNull);
+    test('a pattern ending at the end of the list is found', () {
+      // Regression: the scan loop must use `i <= length - other.length`
+      // so a pattern at the last valid position is found.
+      expect([9, 1, 2].listIndexOf([1, 2]), 1);
+      expect([1, 2].listIndexOf([1, 2]), 0);
     });
   });
 
@@ -170,6 +169,26 @@ void main() {
       await h.pump();
 
       expect(utf8.decode(h.drainStdin()), 'ls\n');
+    });
+
+    test('output keeps flowing when onTerminalInput is assigned late',
+        () async {
+      final h = MuxHarness()..collectStdin();
+
+      // stdout arrives before the app assigns onTerminalInput; this chunk is
+      // dropped because there is no handler yet.
+      h.stdoutController.add(Uint8List.fromList('early'.codeUnits));
+      await h.pump();
+
+      h.mux.onTerminalInput = h.terminalOutput.write;
+
+      // The sink must resolve onTerminalInput lazily instead of capturing
+      // it by value at first use, so later output still reaches the
+      // terminal.
+      h.stdoutController.add(Uint8List.fromList('late'.codeUnits));
+      await h.pump();
+
+      expect(h.terminalOutput.toString(), 'late');
     });
   });
 

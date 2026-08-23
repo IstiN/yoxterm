@@ -187,12 +187,12 @@ void main() {
       final selection = controller.selection;
       expect(selection, isNotNull);
 
-      // NOTE: the current implementation selects only the visible viewport
-      // (buffer.height - viewHeight .. buffer.height - 1), not the scrollback.
+      // The selection covers the full buffer including the scrollback
+      // (line 0 .. buffer.height - 1), not just the visible viewport.
       final text = terminal.buffer.getText(selection!);
+      expect(text, contains('line 0\n'));
       expect(text, contains('line 7\n'));
       expect(text, contains('line 29'));
-      expect(text, isNot(contains('line 6\n')));
     });
 
     testWidgets('selects in line selection mode', (tester) async {

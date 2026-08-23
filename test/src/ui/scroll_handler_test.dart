@@ -135,7 +135,7 @@ void main() {
       await tester.pump();
 
       // SGR-encoded wheel down events, no simulated arrow keys.
-      expect(output.join(), contains('\x1b[<69;'));
+      expect(output.join(), contains('\x1b[<65;'));
       expect(output.join(), isNot(contains('\x1B[B')));
     });
 

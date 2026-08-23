@@ -19,8 +19,10 @@ class EscapeEmitter {
     return '\x1b[0n';
   }
 
+  /// [x] and [y] are 0-based buffer coordinates; the emitted CPR is 1-based
+  /// as required by the spec.
   String cursorPosition(int x, int y) {
-    return '\x1b[$y;${x}R';
+    return '\x1b[${y + 1};${x + 1}R';
   }
 
   String bracketedPaste(String text) {

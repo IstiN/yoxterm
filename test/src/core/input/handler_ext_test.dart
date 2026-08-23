@@ -134,6 +134,26 @@ void main() {
     test('unmapped key returns null', () {
       expect(defaultInputHandler(event(key: TerminalKey.f20)), isNull);
     });
+
+    test('arrow keys follow DECCKM (cursorKeysMode)', () {
+      final state = FakeTerminalState()..cursorKeysMode = true;
+      expect(
+        defaultInputHandler(event(key: TerminalKey.arrowUp, state: state)),
+        '\x1bOA',
+      );
+      expect(
+        defaultInputHandler(event(key: TerminalKey.arrowDown, state: state)),
+        '\x1bOB',
+      );
+    });
+
+    test('appKeypadMode does not affect cursor keys', () {
+      final state = FakeTerminalState()..appKeypadMode = true;
+      expect(
+        defaultInputHandler(event(key: TerminalKey.arrowUp, state: state)),
+        '\x1b[A',
+      );
+    });
   });
 
   group('KeytabInputHandler', () {

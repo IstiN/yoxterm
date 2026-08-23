@@ -75,12 +75,13 @@ void main() {
       expect(handler.calls, ['writeChar(128512)']);
     });
 
-    test('surrogate pair split across chunks is NOT recombined', () {
-      // ByteConsumer.add() processes each chunk independently, so a pair
-      // split across two writes reaches the handler as two lone surrogates.
+    test('surrogate pair split across chunks is recombined', () {
+      // ByteConsumer.add() buffers a trailing lone high surrogate and
+      // prepends it to the next chunk, so the pair is combined.
       parser.write('\ud83d');
+      expect(handler.calls, isEmpty);
       parser.write('\ude00');
-      expect(handler.calls, ['writeChar(55357)', 'writeChar(56832)']);
+      expect(handler.calls, ['writeChar(128512)']);
     });
   });
 
@@ -199,10 +200,9 @@ void main() {
       expect(handler.calls, ['setCursorY(0)', 'setCursorY(4)']);
     });
 
-    test('VPA does NOT clamp 0 (inconsistent with CHA)', () {
-      // Documents current behavior: CSI 0 d yields setCursorY(-1).
+    test('VPA clamps 0 to 1 (consistent with CHA)', () {
       parser.write('\x1b[0d');
-      expect(handler.calls, ['setCursorY(-1)']);
+      expect(handler.calls, ['setCursorY(0)']);
     });
 
     test('CUP sets cursor position (1-based input)', () {
@@ -220,10 +220,15 @@ void main() {
       expect(handler.calls, ['setCursor(2, 1)']);
     });
 
-    test('CUP with a single param ignores it and moves to origin', () {
-      // Documents current behavior: params.length != 2 resets both to 1.
+    test('CUP with a single param sets the row, column defaults to 1', () {
       parser.write('\x1b[5H');
-      expect(handler.calls, ['setCursor(0, 0)']);
+      expect(handler.calls, ['setCursor(0, 4)']);
+    });
+
+    test('CUP clamps 0 params to 1', () {
+      parser.write('\x1b[0;0H');
+      parser.write('\x1b[0;5f');
+      expect(handler.calls, ['setCursor(0, 0)', 'setCursor(4, 0)']);
     });
 
     test('REP repeats the previous character, clamping 0 to 1', () {
@@ -292,10 +297,9 @@ void main() {
       expect(handler.calls, ['insertLines(1)', 'insertLines(2)']);
     });
 
-    test('IL does NOT clamp 0 (inconsistent with cursor movement)', () {
-      // Documents current behavior: CSI 0 L yields insertLines(0).
+    test('IL clamps 0 to 1 (consistent with cursor movement)', () {
       parser.write('\x1b[0L');
-      expect(handler.calls, ['insertLines(0)']);
+      expect(handler.calls, ['insertLines(1)']);
     });
 
     test('DL deletes lines, default 1', () {
@@ -326,6 +330,23 @@ void main() {
       parser.write('\x1b[@');
       parser.write('\x1b[2@');
       expect(handler.calls, ['insertBlankChars(1)', 'insertBlankChars(2)']);
+    });
+
+    test('DL, DCH, SU, SD, ECH and ICH all clamp 0 to 1', () {
+      parser.write('\x1b[0M');
+      parser.write('\x1b[0P');
+      parser.write('\x1b[0S');
+      parser.write('\x1b[0T');
+      parser.write('\x1b[0X');
+      parser.write('\x1b[0@');
+      expect(handler.calls, [
+        'deleteLines(1)',
+        'deleteChars(1)',
+        'scrollUp(1)',
+        'scrollDown(1)',
+        'eraseChars(1)',
+        'insertBlankChars(1)',
+      ]);
     });
   });
 
@@ -811,18 +832,32 @@ void main() {
       expect(handler.calls, ['setCursorBold()', 'setCursorBlink()']);
     });
 
-    test('truncated 38;5 foreground throws a RangeError', () {
-      // Documents a bug: missing color index crashes with RangeError.
-      expect(() => parser.write('\x1b[38;5m'), throwsRangeError);
+    test('truncated 38 foreground is a no-op', () {
+      // A dangling 38 without a color mode is ignored instead of crashing.
+      parser.write('\x1b[38m');
+      expect(handler.calls, isEmpty);
     });
 
-    test('truncated 38;2 foreground throws a RangeError', () {
-      // Documents a bug: missing RGB components crash with RangeError.
-      expect(() => parser.write('\x1b[38;2;10;20m'), throwsRangeError);
+    test('truncated 38;5 foreground is a no-op', () {
+      // Missing color index: the color spec is ignored, not crashed on.
+      parser.write('\x1b[38;5m');
+      expect(handler.calls, isEmpty);
     });
 
-    test('truncated 48 background throws a RangeError', () {
-      expect(() => parser.write('\x1b[48m'), throwsRangeError);
+    test('truncated 38;2 foreground is a no-op', () {
+      // Missing RGB components: the color spec is ignored, not crashed on.
+      parser.write('\x1b[38;2;10;20m');
+      expect(handler.calls, isEmpty);
+    });
+
+    test('truncated 48 background is a no-op', () {
+      parser.write('\x1b[48m');
+      expect(handler.calls, isEmpty);
+    });
+
+    test('params before a truncated color spec still apply', () {
+      parser.write('\x1b[1;38;5m');
+      expect(handler.calls, ['setCursorBold()']);
     });
 
     test('unsupported params are reported individually', () {
@@ -880,11 +915,15 @@ void main() {
       expect(handler.calls, ['unknownOSC(, )']);
     });
 
-    test('OSC terminated by ESC not followed by backslash drops last param', () {
-      // Documents current behavior: the dangling param is discarded and the
-      // char after ESC is swallowed.
+    test('OSC terminated by ESC not followed by backslash keeps the param', () {
+      // The dangling param is emitted and the char after ESC is
+      // re-processed as regular input.
       parser.write('\x1b]0;ab\x1bX');
-      expect(handler.calls, ['unknownOSC(0, )']);
+      expect(handler.calls, [
+        'setTitle(ab)',
+        'setIconName(ab)',
+        'writeChar(88)',
+      ]);
     });
   });
 

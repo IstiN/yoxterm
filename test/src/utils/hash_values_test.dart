@@ -65,10 +65,10 @@ void main() {
       expect(hashList([]), hashList(<Object>[]));
     });
 
-    test('empty list collides with a list containing a single zero', () {
-      // Documents a quirk of the Jenkins combine: combining 0 onto a zero
-      // seed is a no-op, so [] and [0] produce the same hash.
-      expect(hashList([]), hashList([0]));
+    test('empty list does not collide with a list containing a single zero', () {
+      // The list length is mixed into the seed, so [] and [0] hash
+      // differently even though combining 0 is a Jenkins no-op.
+      expect(hashList([]), isNot(hashList([0])));
       expect(hashList([]), isNot(hashList([1])));
     });
 

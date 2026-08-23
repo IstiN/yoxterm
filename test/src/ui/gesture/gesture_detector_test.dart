@@ -6,6 +6,7 @@ import 'package:xterm/src/ui/gesture/gesture_detector.dart';
 void main() {
   Widget buildDetector({
     GestureTapDownCallback? onTapDown,
+    GestureTapUpCallback? onTapUp,
     GestureTapUpCallback? onSingleTapUp,
     GestureTapDownCallback? onDoubleTapDown,
     GestureTapDownCallback? onSecondaryTapDown,
@@ -26,6 +27,7 @@ void main() {
           height: 400,
           child: TerminalGestureDetector(
             onTapDown: onTapDown,
+            onTapUp: onTapUp,
             onSingleTapUp: onSingleTapUp,
             onDoubleTapDown: onDoubleTapDown,
             onSecondaryTapDown: onSecondaryTapDown,
@@ -57,6 +59,42 @@ void main() {
       await tester.tap(find.byType(TerminalGestureDetector));
 
       expect(downs, 1);
+      expect(singleUps, 1);
+
+      // Flush the internal double tap timer.
+      await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 50));
+    });
+
+    testWidgets('single tap fires onTapUp', (tester) async {
+      var ups = 0;
+
+      await tester.pumpWidget(buildDetector(
+        onTapUp: (_) => ups++,
+      ));
+
+      await tester.tap(find.byType(TerminalGestureDetector));
+
+      expect(ups, 1);
+
+      // Flush the internal double tap timer.
+      await tester.pump(kDoubleTapTimeout + const Duration(milliseconds: 50));
+    });
+
+    testWidgets('onTapUp fires for every tap up, onSingleTapUp only for '
+        'non-double taps', (tester) async {
+      var ups = 0;
+      var singleUps = 0;
+
+      await tester.pumpWidget(buildDetector(
+        onTapUp: (_) => ups++,
+        onSingleTapUp: (_) => singleUps++,
+      ));
+
+      await tester.tap(find.byType(TerminalGestureDetector));
+      await tester.pump(const Duration(milliseconds: 50));
+      await tester.tap(find.byType(TerminalGestureDetector));
+
+      expect(ups, 2);
       expect(singleUps, 1);
 
       // Flush the internal double tap timer.

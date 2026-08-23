@@ -69,7 +69,7 @@ class KeytabRecord {
   @override
   String toString() {
     final buffer = StringBuffer();
-    buffer.write('$qtKeyName ');
+    buffer.write('key $qtKeyName ');
 
     if (alt != null) {
       buffer.write(_toMode(alt!, 'Alt'));

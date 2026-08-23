@@ -147,17 +147,16 @@ void main() {
       );
     });
 
-    test('shift+up/down in the alt buffer hit the +AnyMod record instead', () {
-      // find() treats AnyMod as exclusive: the -Shift requirement on
-      // `-Shift+AnyMod+Ansi` is ignored once AnyMod is set, so these
-      // records also match when shift is pressed.
+    test('shift+up/down in the alt buffer keep the placeholder', () {
+      // The explicit -Shift on the `-Shift+AnyMod+Ansi` records is honored
+      // even though AnyMod is set, so the +Shift+AppScreen records win.
       expect(
         actionOf(TerminalKey.arrowUp, shift: true, appScreen: true),
-        '\x1b[1;5A',
+        '\x1b[1;*A',
       );
       expect(
         actionOf(TerminalKey.arrowDown, shift: true, appScreen: true),
-        '\x1b[1;5B',
+        '\x1b[1;*B',
       );
     });
 
@@ -183,9 +182,9 @@ void main() {
       expect(actionOf(TerminalKey.end, appCursorKeys: true), '\x1bOF');
     });
 
-    test('home and end with modifiers keep the placeholder', () {
+    test('home and end with ctrl keep the placeholder', () {
       expect(actionOf(TerminalKey.home, ctrl: true), '\x1b[1;*H');
-      expect(actionOf(TerminalKey.end, shift: true), '\x1b[1;*F');
+      expect(actionOf(TerminalKey.end, ctrl: true), '\x1b[1;*F');
     });
 
     test('insert and delete', () {
@@ -260,29 +259,28 @@ void main() {
       });
     });
 
-    test('the shortcut records are all shadowed by +AnyMod input records',
-        () {
-      // find() treats AnyMod as exclusive: when a record sets +AnyMod, its
-      // other modifier flags (e.g. -Shift) are not consulted. The +AnyMod
-      // input records appear earlier in the keytab, so shift+key never
-      // reaches the scroll shortcut records.
-      expect(actionOf(TerminalKey.arrowUp, shift: true), '\x1b[1;5A');
-      expect(actionOf(TerminalKey.arrowDown, shift: true), '\x1b[1;5B');
-      expect(actionOf(TerminalKey.pageUp, shift: true), '\x1b[5;*~');
-      expect(actionOf(TerminalKey.pageDown, shift: true), '\x1b[6;*~');
-      expect(actionOf(TerminalKey.home, shift: true), '\x1b[1;*H');
-      expect(actionOf(TerminalKey.end, shift: true), '\x1b[1;*F');
+    test('all six scroll shortcuts are reachable via shift+key', () {
+      // find() honors the explicit +Shift on the shortcut records and
+      // treats the +AnyMod input records as fallbacks, so shift+key now
+      // resolves to the scroll shortcuts.
+      expect(actionOf(TerminalKey.arrowUp, shift: true), 'scrollLineUp');
+      expect(actionOf(TerminalKey.arrowDown, shift: true), 'scrollLineDown');
+      expect(actionOf(TerminalKey.pageUp, shift: true), 'scrollPageUp');
+      expect(actionOf(TerminalKey.pageDown, shift: true), 'scrollPageDown');
+      expect(actionOf(TerminalKey.home, shift: true), 'scrollUpToTop');
+      expect(actionOf(TerminalKey.end, shift: true), 'scrollDownToBottom');
     });
 
-    test('shift+page keys inside the alt buffer also hit the +AnyMod record',
-        () {
+    test('shift+page keys inside the alt buffer produce nothing', () {
+      // The scroll shortcut records require -AppScreen, and the
+      // escape-sequence records require -Shift, so no record matches.
       expect(
         actionOf(TerminalKey.pageUp, shift: true, appScreen: true),
-        '\x1b[5;*~',
+        isNull,
       );
       expect(
         actionOf(TerminalKey.pageDown, shift: true, appScreen: true),
-        '\x1b[6;*~',
+        isNull,
       );
     });
   });

@@ -21,12 +21,12 @@ void main() {
       expect(emitter.operatingStatus(), '\x1b[0n');
     });
 
-    test('cursorPosition encodes 1-based row;column', () {
-      expect(emitter.cursorPosition(10, 5), '\x1b[5;10R');
+    test('cursorPosition encodes 1-based row;column from 0-based coords', () {
+      expect(emitter.cursorPosition(9, 4), '\x1b[5;10R');
     });
 
     test('cursorPosition at origin', () {
-      expect(emitter.cursorPosition(0, 0), '\x1b[0;0R');
+      expect(emitter.cursorPosition(0, 0), '\x1b[1;1R');
     });
 
     test('bracketedPaste wraps text in 200~/201~ markers', () {

@@ -72,13 +72,19 @@ void main() {
       }
     });
 
-    test('is empty for a column-crossed non-normalized range', () {
-      // Documents current behavior: toSegments swaps begin/end instead of
-      // using the normalized corners, so a range whose columns cross (but
-      // whose rows are ordered) yields no segments at all.
+    test('normalizes the corners of a column-crossed range', () {
+      // The columns cross (begin.x > end.x) while the rows are ordered;
+      // the range is segmented using the normalized corners.
       final range = BufferRangeBlock(CellOffset(10, 10), CellOffset(5, 12));
 
-      expect(range.toSegments(), isEmpty);
+      final segments = range.toSegments().toList();
+
+      expect(segments, hasLength(3));
+      for (var i = 0; i < 3; i++) {
+        expect(segments[i].line, 10 + i);
+        expect(segments[i].start, 5);
+        expect(segments[i].end, 10);
+      }
     });
   });
 
@@ -95,13 +101,16 @@ void main() {
       expect(range.contains(CellOffset(5, 4)), isFalse);
     });
 
-    test('contains nothing for a column-crossed non-normalized range', () {
-      // Documents current behavior: like toSegments, contains swaps begin/end
-      // instead of normalizing, so the row interval is inverted and no
-      // position can match.
+    test('uses the normalized corners of a column-crossed range', () {
+      // The columns cross (begin.x > end.x) while the rows are ordered;
+      // positions inside the normalized corners are contained.
       final range = BufferRangeBlock(CellOffset(10, 10), CellOffset(5, 12));
 
-      expect(range.contains(CellOffset(7, 11)), isFalse);
+      expect(range.contains(CellOffset(7, 11)), isTrue);
+      expect(range.contains(CellOffset(5, 10)), isTrue);
+      expect(range.contains(CellOffset(10, 12)), isTrue);
+      expect(range.contains(CellOffset(4, 11)), isFalse);
+      expect(range.contains(CellOffset(7, 9)), isFalse);
     });
   });
 

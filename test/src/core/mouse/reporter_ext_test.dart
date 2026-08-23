@@ -49,7 +49,19 @@ void main() {
       expect(beyondLimit[4], '\x00');
     });
 
-    test('wheel buttons use their transposed ids', () {
+    test('row is encoded as 32 + y with 1-based y', () {
+      final output = MouseReporter.report(
+        TerminalMouseButton.left,
+        TerminalMouseButtonState.down,
+        const CellOffset(0, 0),
+        MouseReportMode.normal,
+      );
+
+      // y = 1 at the origin -> '!' (33), matching the column encoding.
+      expect(output[5], '!');
+    });
+
+    test('wheel buttons use their standard ids', () {
       final output = MouseReporter.report(
         TerminalMouseButton.wheelUp,
         TerminalMouseButtonState.down,
@@ -57,8 +69,8 @@ void main() {
         MouseReportMode.normal,
       );
 
-      // 32 + 68 = 100 = 'd'.
-      expect(output[3], 'd');
+      // 32 + 64 = 96 = '`'.
+      expect(output[3], '`');
     });
   });
 
@@ -103,6 +115,18 @@ void main() {
       );
       expect(output[4], String.fromCharCode(32 + 301));
     });
+
+    test('wheel buttons use their standard ids', () {
+      final output = MouseReporter.report(
+        TerminalMouseButton.wheelUp,
+        TerminalMouseButtonState.down,
+        const CellOffset(0, 0),
+        MouseReportMode.utf,
+      );
+
+      // 32 + 64 = 96 = '`'.
+      expect(output[3], '`');
+    });
   });
 
   group('MouseReporter: sgr mode', () {
@@ -132,7 +156,7 @@ void main() {
           const CellOffset(0, 0),
           MouseReportMode.sgr,
         ),
-        '\x1b[<68;1;1M',
+        '\x1b[<64;1;1M',
       );
       expect(
         MouseReporter.report(
@@ -141,7 +165,7 @@ void main() {
           const CellOffset(0, 0),
           MouseReportMode.sgr,
         ),
-        '\x1b[<71;1;1M',
+        '\x1b[<67;1;1M',
       );
     });
 
@@ -187,6 +211,18 @@ void main() {
           MouseReportMode.urxvt,
         ),
         '\x1b[35;1;1M',
+      );
+    });
+
+    test('wheel buttons use their standard ids shifted by 32', () {
+      expect(
+        MouseReporter.report(
+          TerminalMouseButton.wheelUp,
+          TerminalMouseButtonState.down,
+          const CellOffset(0, 0),
+          MouseReportMode.urxvt,
+        ),
+        '\x1b[96;1;1M',
       );
     });
   });

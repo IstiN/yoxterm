@@ -80,8 +80,7 @@ void main() {
       );
     });
 
-    test('disposing twice re-runs callbacks and re-emits onDisposed', () {
-      // Documents current behavior: dispose() is not idempotent.
+    test('disposing twice is a no-op', () {
       final owner = _Owner();
       var callbacks = 0;
       var emissions = 0;
@@ -91,8 +90,8 @@ void main() {
       owner.dispose();
       owner.dispose();
 
-      expect(callbacks, 2);
-      expect(emissions, 2);
+      expect(callbacks, 1);
+      expect(emissions, 1);
     });
   });
 }

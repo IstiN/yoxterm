@@ -57,17 +57,26 @@ void main() {
       final range = _SimpleRange(CellOffset(1, 2), CellOffset(3, 4));
 
       expect(range, _SimpleRange(CellOffset(1, 2), CellOffset(3, 4)));
-      // The base operator== accepts any BufferRange subclass. Note the
-      // asymmetry: BufferRangeLine.operator== rejects non-BufferRangeLine
-      // operands, so the reverse comparison is false.
-      expect(range == BufferRangeLine(CellOffset(1, 2), CellOffset(3, 4)),
-          isTrue);
-      expect(BufferRangeLine(CellOffset(1, 2), CellOffset(3, 4)) == range,
-          isFalse);
       expect(range, isNot(_SimpleRange(CellOffset(1, 2), CellOffset(3, 5))));
       expect(range, isNot(_SimpleRange(CellOffset(0, 2), CellOffset(3, 4))));
       expect(range == Object(), isFalse);
       expect(range == range, isTrue);
+    });
+
+    test('ranges of different subtypes are never equal', () {
+      // The base operator== requires identical runtime types, keeping
+      // equality symmetric with the subtype overrides that reject operands
+      // of other subclasses.
+      final range = _SimpleRange(CellOffset(1, 2), CellOffset(3, 4));
+
+      expect(range == BufferRangeLine(CellOffset(1, 2), CellOffset(3, 4)),
+          isFalse);
+      expect(BufferRangeLine(CellOffset(1, 2), CellOffset(3, 4)) == range,
+          isFalse);
+      expect(BufferRangeLine(CellOffset(1, 2), CellOffset(3, 4)) ==
+          BufferRangeBlock(CellOffset(1, 2), CellOffset(3, 4)), isFalse);
+      expect(BufferRangeBlock(CellOffset(1, 2), CellOffset(3, 4)) ==
+          BufferRangeLine(CellOffset(1, 2), CellOffset(3, 4)), isFalse);
     });
 
     test('equal ranges have equal hash codes', () {

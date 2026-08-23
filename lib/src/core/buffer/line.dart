@@ -31,6 +31,13 @@ class BufferLine with IndexedItem {
 
   var isWrapped = false;
 
+  /// Monotonically increasing mutation counter, bumped by every method that
+  /// changes cell data or recycles the line ([reset]). Consumers such as the
+  /// painter's per-line replay cache compare versions to detect changes
+  /// without diffing cell contents. Anchor moves do not bump it — anchors do
+  /// not affect what the line paints.
+  int version = 0;
+
   int get length => _length;
 
   final _anchors = <CellAnchor>[];
@@ -81,18 +88,22 @@ class BufferLine with IndexedItem {
 
   void setForeground(int index, int value) {
     _data[index * _cellSize + _cellForeground] = value;
+    version++;
   }
 
   void setBackground(int index, int value) {
     _data[index * _cellSize + _cellBackground] = value;
+    version++;
   }
 
   void setAttributes(int index, int value) {
     _data[index * _cellSize + _cellAttributes] = value;
+    version++;
   }
 
   void setContent(int index, int value) {
     _data[index * _cellSize + _cellContent] = value;
+    version++;
   }
 
   void setCodePoint(int index, int char) {
@@ -106,6 +117,7 @@ class BufferLine with IndexedItem {
     _data[offset + _cellBackground] = style.background;
     _data[offset + _cellAttributes] = style.attrs;
     _data[offset + _cellContent] = char | (witdh << CellContent.widthShift);
+    version++;
   }
 
   void setCellData(int index, CellData cellData) {
@@ -114,6 +126,7 @@ class BufferLine with IndexedItem {
     _data[offset + _cellBackground] = cellData.background;
     _data[offset + _cellAttributes] = cellData.flags;
     _data[offset + _cellContent] = cellData.content;
+    version++;
   }
 
   void eraseCell(int index, CursorStyle style) {
@@ -122,6 +135,7 @@ class BufferLine with IndexedItem {
     _data[offset + _cellBackground] = style.background;
     _data[offset + _cellAttributes] = style.attrs;
     _data[offset + _cellContent] = 0;
+    version++;
   }
 
   void resetCell(int index) {
@@ -130,6 +144,7 @@ class BufferLine with IndexedItem {
     _data[offset + _cellBackground] = 0;
     _data[offset + _cellAttributes] = 0;
     _data[offset + _cellContent] = 0;
+    version++;
   }
 
   /// Erase cells whose index satisfies [start] <= index < [end]. Erased cells
@@ -175,7 +190,8 @@ class BufferLine with IndexedItem {
     }
 
     // Update anchors, remove anchors that are inside the removed range.
-    for (var i = 0; i < _anchors.length; i++) {
+    // Iterate backwards: disposing an anchor removes it from [_anchors].
+    for (var i = _anchors.length - 1; i >= 0; i--) {
       final anchor = _anchors[i];
       if (anchor.x >= start) {
         if (anchor.x < start + count) {
@@ -185,6 +201,7 @@ class BufferLine with IndexedItem {
         }
       }
     }
+    version++;
   }
 
   /// Inserts [count] cells at [start]. New cells are initialized with [style].
@@ -212,7 +229,8 @@ class BufferLine with IndexedItem {
     }
 
     // Update anchors, move anchors that are after the inserted range.
-    for (var i = 0; i < _anchors.length; i++) {
+    // Iterate backwards: disposing an anchor removes it from [_anchors].
+    for (var i = _anchors.length - 1; i >= 0; i--) {
       final anchor = _anchors[i];
       if (anchor.x >= start + count) {
         anchor.reposition(anchor.x + count);
@@ -223,6 +241,7 @@ class BufferLine with IndexedItem {
         }
       }
     }
+    version++;
   }
 
   void resize(int length) {
@@ -243,6 +262,7 @@ class BufferLine with IndexedItem {
     }
 
     _length = length;
+    version++;
 
     for (var i = 0; i < _anchors.length; i++) {
       final anchor = _anchors[i];
@@ -291,6 +311,7 @@ class BufferLine with IndexedItem {
       src.data,
       srcCol * _cellSize,
     );
+    version++;
   }
 
   static int _calcCapacity(int length) {
@@ -345,6 +366,7 @@ class BufferLine with IndexedItem {
   void reset() {
     _data.fillRange(0, _data.length, 0);
     isWrapped = false;
+    version++;
     // Detach anchors that still point at this line (e.g. selection ends) so
     // they don't silently follow the line into its new position. Iterate
     // backwards: disposing an anchor removes it from [_anchors].
@@ -354,8 +376,9 @@ class BufferLine with IndexedItem {
   }
 
   void dispose() {
-    for (final anchor in _anchors) {
-      anchor.dispose();
+    // Iterate backwards: disposing an anchor removes it from [_anchors].
+    for (var i = _anchors.length - 1; i >= 0; i--) {
+      _anchors[i].dispose();
     }
   }
 

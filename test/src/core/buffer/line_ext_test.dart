@@ -267,6 +267,31 @@ void main() {
       expect(anchor.x, 4);
       expect(anchor.line, same(line));
     });
+
+    test('multiple anchors inside the removed range are all disposed', () {
+      final line = asciiLine('ABCDEF');
+      final anchorA = line.createAnchor(2);
+      final anchorB = line.createAnchor(3);
+
+      line.removeCells(2, 2);
+
+      expect(anchorA.line, isNull);
+      expect(anchorB.line, isNull);
+      expect(line.anchors, isEmpty);
+    });
+
+    test('anchors after the range move even when an earlier anchor is disposed',
+        () {
+      final line = asciiLine('ABCDEF');
+      final disposedAnchor = line.createAnchor(2);
+      final movedAnchor = line.createAnchor(6);
+
+      line.removeCells(2, 2);
+
+      expect(disposedAnchor.line, isNull);
+      expect(movedAnchor.x, 4);
+      expect(movedAnchor.line, same(line));
+    });
   });
 
   group('BufferLine.insertCells()', () {
@@ -361,6 +386,18 @@ void main() {
 
       expect(anchor.line, isNull);
       expect(line.anchors, isNot(contains(anchor)));
+    });
+
+    test('all anchors pushed past the end of the line are disposed', () {
+      final line = asciiLine('ABCDEF');
+      final anchorA = line.createAnchor(8);
+      final anchorB = line.createAnchor(9);
+
+      line.insertCells(0, 2);
+
+      expect(anchorA.line, isNull);
+      expect(anchorB.line, isNull);
+      expect(line.anchors, isEmpty);
     });
   });
 
@@ -588,6 +625,18 @@ void main() {
       line.dispose();
 
       expect(line.anchors, isEmpty);
+    });
+
+    test('detaches all anchors without throwing', () {
+      final line = asciiLine('ABCDEF');
+      final anchorA = line.createAnchor(2);
+      final anchorB = line.createAnchor(5);
+
+      expect(line.dispose, returnsNormally);
+
+      expect(line.anchors, isEmpty);
+      expect(anchorA.line, isNull);
+      expect(anchorB.line, isNull);
     });
   });
 
