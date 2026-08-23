@@ -1,0 +1,57 @@
+# crap4dart configuration for the xterm fork.
+# See https://github.com/IstiN/crap4dart for details.
+#
+# Mode: RATCHET — the threshold is pinned to the current worst CRAP score so
+# the metric cannot grow. When the worst offender is reduced, lower
+# `crap.threshold` accordingly. Run via `dart pub global` only:
+#   crap4dart analyze
+# (never add crap4dart as a project dependency — analyzer version conflict).
+
+# Directories scanned for Dart sources by "analyze" and "check".
+sources: [lib]
+
+# Files excluded from analysis in every mode (globs relative to project root).
+exclude:
+  - '**.g.dart'
+  - '**.freezed.dart'
+  - '**.mocks.dart'
+
+# CRAP metric analysis settings ("analyze" command).
+crap:
+  enabled: true
+  # Pinned to the current codebase max, 1560.0 (TerminalPainter._drawBoxDrawingChar,
+  # CC 39 @ 0% cov) — ratchet: the metric must not grow. Lower as code improves.
+  threshold: 1560.0
+  # Run the test suite to generate coverage before analyzing.
+  run_tests: false
+
+# Coverage input settings.
+coverage:
+  # Path to the LCOV coverage file, relative to the project root.
+  # Generate with: flutter test --coverage
+  lcov_path: coverage/lcov.info
+  run_tests: false
+  # Fail when no coverage data is available instead of reporting N/A.
+  required: true
+  branch_coverage: true
+
+# Quality gates ("check" command) — observe-only for now.
+gates:
+  loc:
+    enabled: false
+  test_coverage:
+    enabled: false
+  golden:
+    enabled: false
+  hardcoded_strings:
+    enabled: false
+  accessibility:
+    enabled: false
+  complexity:
+    enabled: false
+  method_size:
+    enabled: false
+  duplication:
+    enabled: false
+  public_docs:
+    enabled: false

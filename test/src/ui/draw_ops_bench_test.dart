@@ -1,4 +1,6 @@
+import 'dart:typed_data';
 import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -10,12 +12,31 @@ import '../../_fixture/_fixture.dart';
 class _CountingCanvas implements Canvas {
   var rects = 0;
   var paragraphs = 0;
+  var atlasCalls = 0;
+  var atlasSprites = 0;
 
   @override
   void drawRect(Rect rect, Paint paint) => rects++;
 
   @override
   void drawParagraph(Paragraph paragraph, Offset offset) => paragraphs++;
+
+  @override
+  void drawRawAtlas(
+    ui.Image atlas,
+    Float32List rstTransforms,
+    Float32List rects,
+    Int32List? colors,
+    BlendMode? blendMode,
+    Rect? cullRect,
+    Paint paint,
+  ) {
+    atlasCalls++;
+    atlasSprites += rstTransforms.length ~/ 4;
+  }
+
+  @override
+  Float64List getTransform() => Matrix4.identity().storage;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
@@ -31,9 +52,13 @@ void main() {
       textStyle: const TerminalStyle(fontSize: 13),
       textScaler: TextScaler.noScaling,
     );
+    // A bare PictureRecorder canvas rasterizes at scale 1.0; make the
+    // painter's dpr match so the glyph-atlas path is taken.
+    painter.debugDevicePixelRatio = 1.0;
     final cw = painter.cellSize.width;
 
-    // New merged path.
+    // Current paintLine path: background runs + glyph-atlas sprite batches,
+    // with paragraph fallbacks for non-mergeable cells.
     final merged = _CountingCanvas();
     var cells = 0;
     for (var li = 0; li < terminal.buffer.lines.length; li++) {
@@ -64,12 +89,20 @@ void main() {
         'per-cell: rects=${perCell.rects} paragraphs=${perCell.paragraphs} total=${perCell.rects + perCell.paragraphs}');
     // ignore: avoid_print
     print(
-        'merged:   rects=${merged.rects} paragraphs=${merged.paragraphs} total=${merged.rects + merged.paragraphs}');
+        'merged+atlas: rects=${merged.rects} paragraphs=${merged.paragraphs} '
+        'atlasCalls=${merged.atlasCalls} sprites=${merged.atlasSprites} '
+        'total=${merged.rects + merged.paragraphs + merged.atlasCalls}');
 
     final perCellOps = perCell.rects + perCell.paragraphs;
-    final mergedOps = merged.rects + merged.paragraphs;
+    final mergedOps = merged.rects + merged.paragraphs + merged.atlasCalls;
     expect(mergedOps, lessThan(perCellOps ~/ 2),
         reason:
-            'run merging must at least halve draw ops ($mergedOps vs $perCellOps)');
+            'run merging + atlas batching must at least halve draw ops ($mergedOps vs $perCellOps)');
+    // The atlas should absorb the bulk of ASCII glyphs into a handful of
+    // batched draw calls.
+    expect(merged.atlasSprites, greaterThan(cells ~/ 2),
+        reason: 'most cells should be painted as atlas sprites');
+    expect(merged.paragraphs, lessThan(100),
+        reason: 'ASCII paragraphs should be replaced by atlas batches');
   });
 }

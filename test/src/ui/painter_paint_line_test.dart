@@ -1,4 +1,6 @@
+import 'dart:typed_data';
 import 'dart:ui';
+import 'dart:ui' as ui;
 
 import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -8,6 +10,7 @@ import 'package:xterm/xterm.dart';
 class _RecordingCanvas implements Canvas {
   final rects = <String>[];
   final paragraphs = <String>[];
+  final atlasBatches = <String>[];
 
   @override
   void drawRect(Rect rect, Paint paint) {
@@ -18,6 +21,25 @@ class _RecordingCanvas implements Canvas {
   void drawParagraph(Paragraph paragraph, Offset offset) {
     paragraphs.add('paragraph@(${offset.dx},${offset.dy})');
   }
+
+  @override
+  void drawRawAtlas(
+    ui.Image atlas,
+    Float32List rstTransforms,
+    Float32List rects,
+    Int32List? colors,
+    BlendMode? blendMode,
+    Rect? cullRect,
+    Paint paint,
+  ) {
+    // Record the batch by its first sprite's translation plus sprite count.
+    atlasBatches.add(
+      'atlas@(${rstTransforms[2]},${rstTransforms[3]}) sprites=${rstTransforms.length ~/ 4}',
+    );
+  }
+
+  @override
+  Float64List getTransform() => Matrix4.identity().storage;
 
   @override
   dynamic noSuchMethod(Invocation invocation) => null;
@@ -36,6 +58,9 @@ void main() {
       textStyle: const TerminalStyle(fontSize: 8),
       textScaler: TextScaler.noScaling,
     );
+    // A bare PictureRecorder canvas rasterizes at scale 1.0; make the
+    // painter's dpr match so the glyph-atlas path is taken.
+    painter.debugDevicePixelRatio = 1.0;
     final canvas = _RecordingCanvas();
     painter.paintLine(canvas, Offset.zero, line);
 
@@ -43,9 +68,12 @@ void main() {
     // One bg rect covering exactly the two colored cells.
     expect(canvas.rects, hasLength(1));
     expect(canvas.rects.single, contains('rect(0.0,0.0,${cw * 2},'));
-    // Two text runs: "AB" at col 0, "CD" at col 3.
-    expect(canvas.paragraphs, hasLength(2));
-    expect(canvas.paragraphs[0], 'paragraph@(0.0,0.0)');
-    expect(canvas.paragraphs[1], 'paragraph@(${cw * 3},0.0)');
+    // Mergeable ASCII cells are painted as atlas sprites: one batch for "AB"
+    // (flushed when its blue background rect is drawn) and one for "CD"
+    // (flushed at end of line). No paragraph calls remain for them.
+    expect(canvas.paragraphs, isEmpty);
+    expect(canvas.atlasBatches, hasLength(2));
+    expect(canvas.atlasBatches[0], 'atlas@(0.0,0.0) sprites=2');
+    expect(canvas.atlasBatches[1], 'atlas@(${cw * 3},0.0) sprites=2');
   });
 }

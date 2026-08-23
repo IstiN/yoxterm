@@ -1,6 +1,8 @@
 import 'dart:ui';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/painting.dart';
 
+import 'package:xterm/src/ui/glyph_atlas.dart';
 import 'package:xterm/src/ui/palette_builder.dart';
 import 'package:xterm/src/ui/paragraph_cache.dart';
 import 'package:xterm/xterm.dart';
@@ -37,12 +39,41 @@ class TerminalPainter {
   late var _cellSize = _measureCharSize();
 
   /// Returns the current device pixel ratio.
-  double get _dpr => PlatformDispatcher.instance.implicitView?.devicePixelRatio ?? 1.0;
+  double get _dpr =>
+      debugDevicePixelRatio ??
+      PlatformDispatcher.instance.implicitView?.devicePixelRatio ??
+      1.0;
+
+  /// Overrides the device pixel ratio used for snapping and glyph-atlas
+  /// rasterization. Tests use this to make [_dpr] match the raster scale of
+  /// a bare `PictureRecorder` canvas (always 1.0).
+  @visibleForTesting
+  double? debugDevicePixelRatio;
 
   /// The cached for cells in the terminal. Should be cleared when the same
   /// cell no longer produces the same visual output. For example, when
   /// [_textStyle] is changed, or when the system font changes.
   final _paragraphCache = ParagraphCache(10240);
+
+  /// Lazily created glyph atlas for mergeable ASCII cells. Null until the
+  /// first [paintLine] with mergeable content, and after every invalidation
+  /// (text style / text scaler / font cache / dpr change). Theme changes must
+  /// NOT invalidate it: glyph tiles are white and the terminal color is
+  /// applied as a draw-time tint.
+  GlyphAtlas? _glyphAtlas;
+
+  /// Reusable sprite batches for [Canvas.drawRawAtlas]. The pending batch is
+  /// flushed (and the arrays reused) whenever it fills up mid-line.
+  final _atlasTransforms = Float32List(512 * 4);
+  final _atlasRects = Float32List(512 * 4);
+  final _atlasColors = Int32List(512);
+
+  /// Paint used for atlas sprite batches. Bilinear sampling is exact for the
+  /// dpr-snapped 1:1 texel mapping and smoother for fractional positions.
+  final _atlasPaint = Paint()..filterQuality = FilterQuality.low;
+
+  /// Scratch list of glyph keys to add to the atlas, reused across lines.
+  final _atlasMissingKeys = <int>[];
 
   TerminalStyle get textStyle => _textStyle;
   TerminalStyle _textStyle;
@@ -51,6 +82,7 @@ class TerminalPainter {
     _textStyle = value;
     _cellSize = _measureCharSize();
     _paragraphCache.clear();
+    _invalidateGlyphAtlas();
   }
 
   TextScaler get textScaler => _textScaler;
@@ -60,6 +92,7 @@ class TerminalPainter {
     _textScaler = value;
     _cellSize = _measureCharSize();
     _paragraphCache.clear();
+    _invalidateGlyphAtlas();
   }
 
   TerminalTheme get theme => _theme;
@@ -101,6 +134,65 @@ class TerminalPainter {
   void clearFontCache() {
     _cellSize = _measureCharSize();
     _paragraphCache.clear();
+    _invalidateGlyphAtlas();
+  }
+
+  /// Clears only the paragraph layout cache, keeping the glyph atlas warm.
+  /// This models a flood repaint in benchmarks: the text is new (every layout
+  /// misses) but the glyphs themselves are already rasterized.
+  void clearParagraphCache() {
+    _paragraphCache.clear();
+  }
+
+  void _invalidateGlyphAtlas() {
+    _glyphAtlas?.disposeAndClear();
+    _glyphAtlas = null;
+  }
+
+  /// Returns the atlas for the current configuration, creating it on first
+  /// use and rebuilding it when the device pixel ratio changed.
+  GlyphAtlas _atlas() {
+    final dpr = _dpr;
+    final atlas = _glyphAtlas;
+    if (atlas != null && atlas.devicePixelRatio == dpr) return atlas;
+    atlas?.disposeAndClear();
+    return _glyphAtlas = GlyphAtlas(
+      textStyle: _textStyle,
+      textScaler: _textScaler,
+      cellSize: _cellSize,
+      devicePixelRatio: dpr,
+    );
+  }
+
+  /// Whether the glyph atlas can serve [canvas]: the canvas transform must
+  /// be axis-aligned and scale by exactly [_dpr], so dpr-snapped sprite
+  /// positions map texels 1:1 onto output pixels.
+  bool _atlasUsableOn(Canvas canvas) {
+    final t = canvas.getTransform();
+    return t[1] == 0 &&
+        t[4] == 0 &&
+        t[0] == t[5] &&
+        t[0] == _dpr;
+  }
+
+  /// Pre-rasterizes every mergeable glyph variant of [line] that the atlas
+  /// does not have yet, batching the additions into a single atlas rebuild.
+  void _ensureLineGlyphs(GlyphAtlas atlas, BufferLine line) {
+    final missing = _atlasMissingKeys..clear();
+    final cellData = _reusableCellData;
+    for (var i = 0; i < line.length; i++) {
+      line.getCellData(i, cellData);
+      final charWidth = cellData.content >> CellContent.widthShift;
+      final charCode = cellData.content & CellContent.codepointMask;
+      if (charWidth == 1 && charCode > 0x20 && charCode <= 0x7E) {
+        if (atlas.tileIndex(charCode, cellData.flags) < 0) {
+          final key = GlyphAtlas.keyFor(charCode, cellData.flags);
+          if (!missing.contains(key)) missing.add(key);
+        }
+      }
+      if (charWidth == 2) i++;
+    }
+    if (missing.isNotEmpty) atlas.ensureAll(missing);
   }
 
   /// Paints the cursor based on the current cursor type.
@@ -164,21 +256,27 @@ class TerminalPainter {
   /// 0, and the y offset is the top of the line.
   ///
   /// Adjacent cells with the same resolved background are painted as a single
-  /// rect, and adjacent mergeable foreground cells (printable ASCII,
-  /// single-width, same style) are painted as a single text run with one
-  /// drawParagraph call. Painting per cell costs one Impeller entity + one
-  /// Metal draw call per glyph, which saturated the raster thread when several
-  /// terminals flooded output (~10k cells per frame per terminal). The font is
-  /// monospace, so a run of ASCII glyphs lands exactly on cell boundaries;
-  /// ligatures are disabled in runs to stay pixel-identical with the per-cell
-  /// path, which can never ligate single characters.
+  /// rect. Mergeable foreground cells (printable ASCII, single-width) are
+  /// painted as sprite batches from the glyph atlas: each cell appends an
+  /// RSTransform + tint color to reusable typed arrays, and the pending batch
+  /// is flushed with a single [Canvas.drawRawAtlas] right after the
+  /// background rect that covers it (and before any inline cell foreground),
+  /// and at end of line. This preserves the per-cell draw order (bg(i),
+  /// fg(i), bg(i+1), fg(i+1)…, so the next cell's background still covers
+  /// the previous glyph's right-edge antialiasing bleed) while collapsing
+  /// dozens of drawParagraph calls into ~1 GPU draw call per line. Glyph
+  /// layout happens once per glyph variant, not once per unique line, so
+  /// flood frames with all-new text no longer pay for Paragraph.layout.
   ///
-  /// Draw order mirrors the per-cell path: before a text run (or a lone
-  /// non-mergeable cell) is drawn, the pending background run is flushed up to
-  /// the run's end column. Per cell this is bg(i), fg(i), bg(i+1), fg(i+1)…,
-  /// so the next cell's background covers the previous glyph's right-edge
-  /// antialiasing bleed; flushing the background segment first preserves that
-  /// exact ordering at run granularity.
+  /// Cells the atlas cannot serve (overflow beyond its capacity, or a canvas
+  /// whose raster scale doesn't match the dpr — widget-test captures, board
+  /// zoom) fall back to the merged text-run path: adjacent printable ASCII
+  /// cells with equal style are painted as a single paragraph. Faint and italic cells are
+  /// excluded from text runs (their alpha/skew rasterizes a couple of levels
+  /// differently in a multi-glyph run) but ARE served by the atlas, whose
+  /// tiles are single-glyph paragraphs — pixel-identical to the per-cell
+  /// path. Emoji, wide chars and other non-ASCII cells keep the per-cell
+  /// paragraph path; box-drawing chars use primitives.
   void paintLine(
     Canvas canvas,
     Offset offset,
@@ -187,6 +285,36 @@ class TerminalPainter {
     final cellData = _reusableCellData;
     final cellWidth = _cellSize.width;
     final snappedY = _snap(offset.dy);
+    // The atlas is only usable when the canvas raster scale matches the dpr
+    // the tiles are (re)built for — otherwise snapped sprite positions no
+    // longer land on texel boundaries and sampling would blur compared to
+    // the paragraph path. In particular widget tests capture at 1x while
+    // the implicit view reports a higher dpr, and board zoom applies a
+    // scale on top of the dpr; both fall back to the paragraph path.
+    final atlas = _atlasUsableOn(canvas) ? _atlas() : null;
+    final atlasScale = atlas == null ? 0.0 : 1.0 / atlas.devicePixelRatio;
+
+    var spriteCount = 0;
+
+    // Flushes the pending sprite batch with one drawRawAtlas call. Mid-line
+    // flushes only happen at points where the per-cell path would draw too
+    // (before a background rect or an inline cell foreground), so the
+    // relative order of canvas ops is unchanged.
+    void flushSprites() {
+      if (spriteCount == 0) return;
+      // Sprites only accumulate when the atlas served their tiles, so the
+      // atlas and its image are non-null here.
+      canvas.drawRawAtlas(
+        atlas!.image!,
+        Float32List.sublistView(_atlasTransforms, 0, spriteCount * 4),
+        Float32List.sublistView(_atlasRects, 0, spriteCount * 4),
+        Int32List.sublistView(_atlasColors, 0, spriteCount),
+        BlendMode.modulate,
+        null,
+        _atlasPaint,
+      );
+      spriteCount = 0;
+    }
 
     Color? bgRunColor;
     var bgRunStartCol = 0;
@@ -210,6 +338,9 @@ class TerminalPainter {
         ),
         paint,
       );
+      // This rect covers the pending sprite cells, so their glyphs go next,
+      // exactly like bg-then-fg per cell in the per-cell path.
+      flushSprites();
       bgRunStartCol = endCol;
     }
 
@@ -251,20 +382,59 @@ class TerminalPainter {
         bgRunColor = bg;
       }
 
-      // Foreground: merge printable single-width ASCII with equal style.
-      // Faint cells are excluded: their alpha-128 glyph coverage rounds a
-      // couple of levels differently between a run paragraph and single-cell
-      // paragraphs (subpixel AA), which golden tests catch. Italic cells are
-      // excluded for the same reason: synthetic-italic skew rasterizes
-      // slightly differently in a multi-glyph run. Spaces are excluded too:
-      // a plain space paints nothing, and keeping it out of the run lets the
-      // pending background segment cover the previous glyph's right-edge AA
-      // bleed exactly like the per-cell path does.
-      final mergeable = charWidth == 1 &&
-          charCode > 0x20 &&
-          charCode <= 0x7E &&
-          cellData.flags & (CellFlags.faint | CellFlags.italic) == 0;
-      if (mergeable) {
+      // Foreground: mergeable cells (printable single-width ASCII) become
+      // atlas sprites when the atlas is usable. Unlike text runs this
+      // includes faint (draw-time alpha tint) and italic (single-glyph tile)
+      // cells.
+      final mergeable =
+          charWidth == 1 && charCode > 0x20 && charCode <= 0x7E;
+      var tile = -1;
+      if (mergeable && atlas != null) {
+        tile = atlas.tileIndex(charCode, cellData.flags);
+        if (tile < 0 && !atlas.isFull) {
+          _ensureLineGlyphs(atlas, line);
+          tile = atlas.tileIndex(charCode, cellData.flags);
+        }
+      }
+      if (tile >= 0) {
+        flushTextRun(i);
+        if (spriteCount * 4 == _atlasTransforms.length) {
+          // Sprite arrays full — flush mid-line. Consecutive sprites have
+          // no interleaved canvas ops, so splitting the batch is safe.
+          flushSprites();
+        }
+        final o = spriteCount * 4;
+        _atlasTransforms[o] = atlasScale;
+        _atlasTransforms[o + 1] = 0;
+        _atlasTransforms[o + 2] = _snap(offset.dx + i * cellWidth);
+        _atlasTransforms[o + 3] = snappedY;
+        final r = tile * 4;
+        final tileRects = atlas!.tileRects;
+        _atlasRects[o] = tileRects[r];
+        _atlasRects[o + 1] = tileRects[r + 1];
+        _atlasRects[o + 2] = tileRects[r + 2];
+        _atlasRects[o + 3] = tileRects[r + 3];
+        final flags = cellData.flags;
+        var color = flags & CellFlags.inverse == 0
+            ? resolveForegroundColor(cellData.foreground)
+            : resolveBackgroundColor(cellData.background);
+        if (flags & CellFlags.faint != 0) {
+          color = color.withAlpha(128);
+        }
+        _atlasColors[spriteCount] = color.toARGB32();
+        spriteCount++;
+      } else if (mergeable &&
+          cellData.flags & (CellFlags.faint | CellFlags.italic) == 0) {
+        // Atlas unavailable (canvas raster scale mismatch) or full: merged
+        // text-run path. Faint cells are excluded: their alpha-128 glyph
+        // coverage rounds a couple of levels differently between a run
+        // paragraph and single-cell paragraphs (subpixel AA), which golden
+        // tests catch. Italic cells are excluded for the same reason:
+        // synthetic-italic skew rasterizes slightly differently in a
+        // multi-glyph run. Spaces are excluded too: a plain space paints
+        // nothing, and keeping it out of the run lets the pending background
+        // segment cover the previous glyph's right-edge AA bleed exactly
+        // like the per-cell path does.
         final flags = cellData.flags;
         if (textRunFlags >= 0 &&
             flags == textRunFlags &&
@@ -287,6 +457,13 @@ class TerminalPainter {
         // right-edge AA bleed).
         if (charCode != 0 &&
             !(charCode == 0x20 && cellData.flags & CellFlags.underline == 0)) {
+          if (spriteCount > 0) {
+            // Draw the background segment covering the pending sprites,
+            // then the sprites, then this cell's background — exactly the
+            // per-cell order (bg, fg, next bg).
+            flushBackgroundRun(i);
+            flushSprites();
+          }
           // Snap directly from the original offset so that cellRight(i)
           // always equals cellLeft(i+1), eliminating rounding gaps.
           final cellLeft = _snap(offset.dx + i * cellWidth);
@@ -310,6 +487,7 @@ class TerminalPainter {
 
     flushTextRun(line.length);
     flushBackgroundRun(line.length);
+    flushSprites();
   }
 
   /// Resolves the effective background color of a cell, mirroring

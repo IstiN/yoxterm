@@ -64,6 +64,9 @@ void main() {
       textStyle: const TerminalStyle(fontSize: 13),
       textScaler: TextScaler.noScaling,
     );
+    // A bare PictureRecorder canvas rasterizes at scale 1.0; make the
+    // painter's dpr match so the glyph-atlas path is taken.
+    painter.debugDevicePixelRatio = 1.0;
     final lines = paintTerminal.buffer.lines;
 
     void paintFrame(Canvas canvas) {
@@ -108,6 +111,23 @@ void main() {
     print(
       'paint cold (all miss): ${(coldSw.elapsedMicroseconds / coldFrames).toStringAsFixed(0)} µs/frame '
       '(incl. cache clear)',
+    );
+
+    // Realistic flood: the text of every line is new (paragraph layouts all
+    // miss), but the glyph atlas stays warm — glyphs themselves were already
+    // rasterized. This is the steady state of a flooding terminal and must
+    // not pay for Paragraph.layout anymore.
+    final floodSw = Stopwatch()..start();
+    for (var f = 0; f < coldFrames; f++) {
+      painter.clearParagraphCache();
+      final floodRecorder = PictureRecorder();
+      paintFrame(Canvas(floodRecorder));
+      floodRecorder.endRecording().dispose();
+    }
+    floodSw.stop();
+    // ignore: avoid_print
+    print(
+      'paint flood (atlas hit, layout miss): ${(floodSw.elapsedMicroseconds / coldFrames).toStringAsFixed(0)} µs/frame',
     );
   });
 }
