@@ -83,6 +83,127 @@ class TerminalPainter {
   /// the steady-state size stays far below this.
   static const _maxLinePaintCacheEntries = 1024;
 
+  /// Object pools for the recorded paint ops (XRecycler-style). Under output
+  /// floods every rebuilt line allocates a handful of op objects plus four
+  /// typed arrays per sprite batch; recycling them through per-type stacks
+  /// keeps that garbage out of the GC entirely. Ops are only recycled when
+  /// their owning cache entry is evicted, so a pooled instance is never
+  /// referenced by a live cache entry.
+  final _bgRectOpPool = <_BgRectOp>[];
+  final _spriteBatchOpPool = <_SpriteBatchOp>[];
+  final _textRunOpPool = <_TextRunOp>[];
+  final _cellOpPool = <_CellOp>[];
+
+  /// Maximum number of pooled instances kept per op type.
+  static const _opPoolCapacity = 512;
+
+  /// Sprite batches larger than this (in sprites) are handed to the GC
+  /// instead of the pool, so one huge batch cannot pin memory forever.
+  static const _maxPooledSpriteCount = 4096;
+
+  /// Total number of op instances currently held in the pools. Exposed for
+  /// tests that assert reuse across line rebuilds.
+  @visibleForTesting
+  int get debugOpPoolSize =>
+      _bgRectOpPool.length +
+      _spriteBatchOpPool.length +
+      _textRunOpPool.length +
+      _cellOpPool.length;
+
+  /// Returns the ops of every cached line to the pools and clears the cache.
+  void _clearLinePaintCache() {
+    for (final entry in _linePaintCache.values) {
+      _recycleOps(entry.ops);
+    }
+    _linePaintCache.clear();
+  }
+
+  /// Recycles the ops of an evicted cache entry into the per-type pools.
+  void _recycleOps(List<_LinePaintOp> ops) {
+    for (final op in ops) {
+      switch (op) {
+        case _BgRectOp():
+          if (_bgRectOpPool.length < _opPoolCapacity) _bgRectOpPool.add(op);
+        case _SpriteBatchOp():
+          if (op.length <= _maxPooledSpriteCount &&
+              _spriteBatchOpPool.length < _opPoolCapacity) {
+            _spriteBatchOpPool.add(op);
+          }
+        case _TextRunOp():
+          if (_textRunOpPool.length < _opPoolCapacity) _textRunOpPool.add(op);
+        case _CellOp():
+          if (_cellOpPool.length < _opPoolCapacity) _cellOpPool.add(op);
+      }
+    }
+  }
+
+  _BgRectOp _obtainBgRectOp(
+      int startCol, int endCol, int colorArgb, Rect rect) {
+    final op =
+        _bgRectOpPool.isEmpty ? _BgRectOp() : _bgRectOpPool.removeLast();
+    return op
+      ..startCol = startCol
+      ..endCol = endCol
+      ..colorArgb = colorArgb
+      ..rect = rect;
+  }
+
+  /// Obtains a [_SpriteBatchOp] with capacity for [spriteCount] sprites and
+  /// copies the pending scratch arrays ([_atlasRects], [_atlasColors],
+  /// [_atlasSpriteCols], [_atlasTransforms]) into it.
+  _SpriteBatchOp _obtainSpriteBatchOp(int spriteCount) {
+    final floats = spriteCount * 4;
+    _SpriteBatchOp? op;
+    while (_spriteBatchOpPool.isNotEmpty) {
+      final candidate = _spriteBatchOpPool.removeLast();
+      // All four arrays share the same capacity, so checking one is enough.
+      // Undersized candidates are dropped for the GC.
+      if (candidate.rects.length >= floats) {
+        op = candidate;
+        break;
+      }
+    }
+    op ??= _SpriteBatchOp(
+      Float32List(floats),
+      Int32List(spriteCount),
+      Int32List(spriteCount),
+      Float32List(floats),
+    );
+    op.rects.setRange(0, floats, _atlasRects);
+    op.colors.setRange(0, spriteCount, _atlasColors);
+    op.cols.setRange(0, spriteCount, _atlasSpriteCols);
+    op.transforms.setRange(0, floats, _atlasTransforms);
+    op.length = spriteCount;
+    return op;
+  }
+
+  _TextRunOp _obtainTextRunOp(int startCol, String text, int flags,
+      int foreground, int background, Offset offset) {
+    final op =
+        _textRunOpPool.isEmpty ? _TextRunOp() : _textRunOpPool.removeLast();
+    return op
+      ..startCol = startCol
+      ..text = text
+      ..flags = flags
+      ..foreground = foreground
+      ..background = background
+      ..offset = offset;
+  }
+
+  _CellOp _obtainCellOp(int col, int effectiveCols, int foreground,
+      int background, int flags, int content, double left, double right) {
+    final op = _cellOpPool.isEmpty ? _CellOp() : _cellOpPool.removeLast();
+    return op
+      ..col = col
+      ..effectiveCols = effectiveCols
+      ..foreground = foreground
+      ..background = background
+      ..flags = flags
+      ..content = content
+      ..left = left
+      ..right = right;
+  }
+
   /// Number of lines rebuilt (cache miss) in [paintLine] since this counter
   /// was last reset. Tests use it to assert repaint work scales with the
   /// number of changed lines, not with the number of visible lines.
@@ -124,7 +245,7 @@ class TerminalPainter {
     _colorPalette = PaletteBuilder(value).build();
     _paragraphCache.clear();
     // Colors are baked into recorded line ops, so the replay cache must go.
-    _linePaintCache.clear();
+    _clearLinePaintCache();
   }
 
   Size _measureCharSize() {
@@ -171,7 +292,7 @@ class TerminalPainter {
     _glyphAtlas?.disposeAndClear();
     _glyphAtlas = null;
     // Recorded sprite ops reference atlas tiles, so the replay cache must go.
-    _linePaintCache.clear();
+    _clearLinePaintCache();
   }
 
   /// Returns the atlas for the current configuration, creating it on first
@@ -333,8 +454,11 @@ class TerminalPainter {
     final ops = <_LinePaintOp>[];
     _buildLine(canvas, offset, line, atlas, ops);
     if (_linePaintCache.length >= _maxLinePaintCacheEntries) {
-      _linePaintCache.clear();
+      _clearLinePaintCache();
     }
+    // Recycle the previous entry's ops before overwriting it.
+    final previous = _linePaintCache[line];
+    if (previous != null) _recycleOps(previous.ops);
     _linePaintCache[line] = _LinePaintCache(version, offset, atlas, ops);
   }
 
@@ -367,9 +491,14 @@ class TerminalPainter {
               ..style = PaintingStyle.fill,
           );
         case _SpriteBatchOp():
-          final count = op.cols.length;
-          var transforms = op.transforms;
-          if (!sameOffset) {
+          final count = op.length;
+          // The pooled arrays may be larger than the batch — slice views.
+          final rects = Float32List.sublistView(op.rects, 0, count * 4);
+          final colors = Int32List.sublistView(op.colors, 0, count);
+          Float32List transforms;
+          if (sameOffset) {
+            transforms = Float32List.sublistView(op.transforms, 0, count * 4);
+          } else {
             final atlasScale = 1.0 / atlas!.devicePixelRatio;
             for (var s = 0; s < count; s++) {
               final o = s * 4;
@@ -385,8 +514,8 @@ class TerminalPainter {
           canvas.drawRawAtlas(
             atlas!.image!,
             transforms,
-            op.rects,
-            op.colors,
+            rects,
+            colors,
             BlendMode.modulate,
             null,
             _atlasPaint,
@@ -442,20 +571,7 @@ class TerminalPainter {
       if (spriteCount == 0) return;
       // Sprites only accumulate when the atlas served their tiles, so the
       // atlas and its image are non-null here.
-      ops.add(
-        _SpriteBatchOp(
-          Float32List.fromList(
-            Float32List.sublistView(_atlasRects, 0, spriteCount * 4),
-          ),
-          Int32List.fromList(Int32List.sublistView(_atlasColors, 0, spriteCount)),
-          Int32List.fromList(
-            Int32List.sublistView(_atlasSpriteCols, 0, spriteCount),
-          ),
-          Float32List.fromList(
-            Float32List.sublistView(_atlasTransforms, 0, spriteCount * 4),
-          ),
-        ),
-      );
+      ops.add(_obtainSpriteBatchOp(spriteCount));
       canvas.drawRawAtlas(
         atlas!.image!,
         Float32List.sublistView(_atlasTransforms, 0, spriteCount * 4),
@@ -487,7 +603,7 @@ class TerminalPainter {
         _snap(offset.dx + endCol * cellWidth),
         snappedY + _cellSize.height,
       );
-      ops.add(_BgRectOp(bgRunStartCol, endCol, color.toARGB32(), rect));
+      ops.add(_obtainBgRectOp(bgRunStartCol, endCol, color.toARGB32(), rect));
       canvas.drawRect(rect, paint);
       // This rect covers the pending sprite cells, so their glyphs go next,
       // exactly like bg-then-fg per cell in the per-cell path.
@@ -511,7 +627,7 @@ class TerminalPainter {
       final runOffset =
           Offset(_snap(offset.dx + textRunStartCol * cellWidth), snappedY);
       ops.add(
-        _TextRunOp(
+        _obtainTextRunOp(
           textRunStartCol,
           text,
           textRunFlags,
@@ -637,7 +753,7 @@ class TerminalPainter {
           // per-cell path does (bg then fg per cell).
           flushBackgroundRun(i + effectiveCols);
           ops.add(
-            _CellOp(
+            _obtainCellOp(
               i,
               effectiveCols,
               cellData.foreground,
@@ -1135,13 +1251,16 @@ sealed class _LinePaintOp {
 /// A merged background rect covering columns [startCol]..[endCol] filled with
 /// [colorArgb]. [rect] is the baked, snapped geometry from recording time,
 /// reused verbatim when the line is replayed at the same offset.
+///
+/// Fields are mutable so instances can be recycled through the painter's op
+/// pools; a pooled instance is never referenced by a live cache entry.
 final class _BgRectOp extends _LinePaintOp {
-  const _BgRectOp(this.startCol, this.endCol, this.colorArgb, this.rect);
+  _BgRectOp();
 
-  final int startCol;
-  final int endCol;
-  final int colorArgb;
-  final Rect rect;
+  int startCol = 0;
+  int endCol = 0;
+  int colorArgb = 0;
+  Rect rect = Rect.zero;
 }
 
 /// A flushed [Canvas.drawRawAtlas] batch. [rects] are the baked texel rects
@@ -1149,59 +1268,51 @@ final class _BgRectOp extends _LinePaintOp {
 /// instance and offset the batch was recorded against), [colors] the
 /// per-sprite tint, and [cols] the cell column of each sprite — used to
 /// recompute snapped positions when replaying at a different offset.
+///
+/// The arrays are capacity arrays: only the first [length] sprites are
+/// valid. Instances are recycled through the painter's op pool, so the
+/// capacity may exceed [length].
 final class _SpriteBatchOp extends _LinePaintOp {
-  const _SpriteBatchOp(this.rects, this.colors, this.cols, this.transforms);
+  _SpriteBatchOp(this.rects, this.colors, this.cols, this.transforms);
 
-  final Float32List rects;
-  final Int32List colors;
-  final Int32List cols;
-  final Float32List transforms;
+  /// Number of valid sprites in [rects]/[colors]/[cols]/[transforms].
+  int length = 0;
+  Float32List rects;
+  Int32List colors;
+  Int32List cols;
+  Float32List transforms;
 }
 
 /// A merged run of same-style printable cells painted as a single paragraph.
-/// [offset] is the baked draw offset from recording time.
+/// [offset] is the baked draw offset from recording time. Mutable for pooling
+/// (see [_BgRectOp]).
 final class _TextRunOp extends _LinePaintOp {
-  const _TextRunOp(
-    this.startCol,
-    this.text,
-    this.flags,
-    this.foreground,
-    this.background,
-    this.offset,
-  );
+  _TextRunOp();
 
-  final int startCol;
-  final String text;
-  final int flags;
-  final int foreground;
-  final int background;
-  final Offset offset;
+  int startCol = 0;
+  String text = '';
+  int flags = 0;
+  int foreground = 0;
+  int background = 0;
+  Offset offset = Offset.zero;
 }
 
 /// A cell painted individually (emoji, wide chars, box drawing, or a
 /// faint/italic cell when the atlas is unavailable) — replayed via
 /// [TerminalPainter.paintCellForeground]. [left] and [right] are the baked,
-/// snapped horizontal edges from recording time.
+/// snapped horizontal edges from recording time. Mutable for pooling (see
+/// [_BgRectOp]).
 final class _CellOp extends _LinePaintOp {
-  const _CellOp(
-    this.col,
-    this.effectiveCols,
-    this.foreground,
-    this.background,
-    this.flags,
-    this.content,
-    this.left,
-    this.right,
-  );
+  _CellOp();
 
-  final int col;
-  final int effectiveCols;
-  final int foreground;
-  final int background;
-  final int flags;
-  final int content;
-  final double left;
-  final double right;
+  int col = 0;
+  int effectiveCols = 0;
+  int foreground = 0;
+  int background = 0;
+  int flags = 0;
+  int content = 0;
+  double left = 0;
+  double right = 0;
 }
 
 /// The recorded op list of one [BufferLine], valid only for the [BufferLine]

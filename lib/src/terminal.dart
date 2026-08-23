@@ -241,9 +241,11 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     // the common case for plain-text output floods.
     if (!_parser.hasPendingInput && !_requiresParser(data)) {
       // Keep _precedingCodepoint in sync so CSI n b (REP) still works after
-      // a fast-path write; writeChar would normally maintain it.
+      // a fast-path write; writeChar would normally maintain it. Extracted
+      // via codeUnitAt instead of data.runes.last, which allocates a Runes
+      // iterable and scans the whole chunk to find the last code point.
       if (data.isNotEmpty) {
-        _precedingCodepoint = data.runes.last;
+        _precedingCodepoint = _lastCodepoint(data);
       }
       _buffer.write(data);
       notifyListeners();
@@ -251,6 +253,23 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
     }
     _parser.write(data);
     notifyListeners();
+  }
+
+  /// The last code point of [data], equivalent to `data.runes.last` but
+  /// allocation-free. A trailing low surrogate is combined with a preceding
+  /// high surrogate; any other trailing unit (including a lone low surrogate,
+  /// which [Runes] also yields as-is) is returned verbatim. A trailing lone
+  /// high surrogate never reaches here — [_requiresParser] routes such chunks
+  /// through the parser.
+  static int _lastCodepoint(String data) {
+    final last = data.codeUnitAt(data.length - 1);
+    if (last >= 0xDC00 && last <= 0xDFFF && data.length >= 2) {
+      final high = data.codeUnitAt(data.length - 2);
+      if (high >= 0xD800 && high <= 0xDBFF) {
+        return 0x10000 + ((high - 0xD800) << 10) + (last - 0xDC00);
+      }
+    }
+    return last;
   }
 
   /// Whether [data] must go through the parser instead of the fast path in

@@ -35,6 +35,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     required TerminalCursorType cursorType,
     required bool alwaysShowCursor,
     EditableRectCallback? onEditableRect,
+    ValueGetter<bool>? inputConnectionOpen,
     String? composingText,
   })  : _terminal = terminal,
         _controller = controller,
@@ -45,6 +46,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         _cursorType = cursorType,
         _alwaysShowCursor = alwaysShowCursor,
         _onEditableRect = onEditableRect,
+        _inputConnectionOpen = inputConnectionOpen,
         _composingText = composingText,
         _painter = TerminalPainter(
           theme: theme,
@@ -167,6 +169,19 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (value == _onEditableRect) return;
     _onEditableRect = value;
     markNeedsLayout();
+  }
+
+  /// Whether an IME input connection is currently open. The editable-rect
+  /// consumer ([_onEditableRect]) only forwards geometry to that connection,
+  /// so when this reports false [_notifyEditableRect] skips its
+  /// localToGlobal/Rect math entirely. A getter (queried per notify) rather
+  /// than a plain bool because the connection opens and closes on focus
+  /// changes without a render-object update. Null means "unknown" and keeps
+  /// the geometry math (used by tests that drive [RenderTerminal] directly).
+  ValueGetter<bool>? _inputConnectionOpen;
+  set inputConnectionOpen(ValueGetter<bool>? value) {
+    // Assignment only: this gates a side-channel callback, not layout/paint.
+    _inputConnectionOpen = value;
   }
 
   String? _composingText;
@@ -375,6 +390,10 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final onEditableRect = _onEditableRect;
     // Skip the localToGlobal/Rect math entirely when nobody is listening.
     if (onEditableRect == null) return;
+    // The consumer only forwards the rect to an open IME input connection —
+    // skip the geometry math while no connection is open.
+    final inputConnectionOpen = _inputConnectionOpen;
+    if (inputConnectionOpen != null && !inputConnectionOpen()) return;
 
     final cursor = localToGlobal(cursorOffset);
 

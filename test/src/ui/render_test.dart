@@ -465,6 +465,9 @@ void main() {
 
       final calls = <List<Rect>>[];
       rt.onEditableRect = (rect, caretRect) => calls.add([rect, caretRect]);
+      // Notifications are gated on an open IME input connection (the only
+      // consumer of the geometry) — simulate one being open.
+      rt.inputConnectionOpen = () => true;
 
       terminal.write('x');
       await tester.pump();
@@ -473,8 +476,15 @@ void main() {
       expect(calls.last[1].width, rt.cellSize.width);
       expect(calls.last[1].height, rt.cellSize.height);
 
-      // Clearing the callback stops the notifications.
+      // A closed input connection skips the notifications.
       calls.clear();
+      rt.inputConnectionOpen = () => false;
+      terminal.write('z');
+      await tester.pump();
+      expect(calls, isEmpty);
+
+      // Clearing the callback stops the notifications.
+      rt.inputConnectionOpen = () => true;
       rt.onEditableRect = null;
       terminal.write('y');
       await tester.pump();

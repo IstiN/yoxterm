@@ -239,4 +239,58 @@ void main() {
       'paint partial damage (2/${lines.length} lines): ${(partialSw.elapsedMicroseconds / partialFrames).toStringAsFixed(0)} µs/frame',
     );
   });
+
+  test('op pool recycles evicted line ops across rebuilds', () {
+    final terminal = Terminal();
+    terminal.write(TestFixtures.htop_80x25_3s());
+
+    final painter = TerminalPainter(
+      theme: TerminalThemes.defaultTheme,
+      textStyle: const TerminalStyle(fontSize: 13),
+      textScaler: TextScaler.noScaling,
+    );
+    painter.debugDevicePixelRatio = 1.0;
+    final lines = terminal.buffer.lines;
+
+    void paintRecorded() {
+      final recorder = PictureRecorder();
+      final canvas = Canvas(recorder);
+      for (var li = 0; li < lines.length; li++) {
+        painter.paintLine(canvas, Offset(0, li * 16.0), lines[li]);
+      }
+      recorder.endRecording().dispose();
+    }
+
+    // Frame 1: build all lines. No evictions yet, so the pools stay empty.
+    paintRecorded();
+    expect(painter.debugOpPoolSize, 0,
+        reason: 'nothing has been evicted after the first frame');
+
+    // Damage every line and repaint: each rebuilt line overwrites its cached
+    // entry, recycling the previous ops into the pools.
+    for (var li = 0; li < lines.length; li++) {
+      lines[li].setCell(0, 0x58 /* 'X' */, 1, CursorStyle.empty);
+    }
+    paintRecorded();
+    final afterSecondFrame = painter.debugOpPoolSize;
+    expect(afterSecondFrame, greaterThan(0),
+        reason: 'overwritten cache entries must recycle their ops');
+
+    // Damage and repaint again: the recycled ops must be reused, so the pool
+    // size must not keep growing.
+    for (var li = 0; li < lines.length; li++) {
+      lines[li].setCell(1, 0x59 /* 'Y' */, 1, CursorStyle.empty);
+    }
+    paintRecorded();
+    expect(painter.debugOpPoolSize, lessThanOrEqualTo(afterSecondFrame),
+        reason: 'rebuilds must draw from the pools instead of allocating');
+
+    // Theme change clears the whole cache; the pools must absorb it and stay
+    // bounded by their capacity.
+    painter.theme = TerminalThemes.defaultTheme;
+    paintRecorded();
+    painter.theme = TerminalThemes.whiteOnBlack;
+    expect(painter.debugOpPoolSize, lessThanOrEqualTo(4 * 512),
+        reason: 'pools are capped per op type');
+  });
 }

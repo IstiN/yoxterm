@@ -236,6 +236,7 @@ class TerminalViewState extends State<TerminalView> {
           cursorType: widget.cursorType,
           alwaysShowCursor: widget.alwaysShowCursor,
           onEditableRect: _onEditableRect,
+          inputConnectionOpen: () => hasInputConnection,
           composingText: _composingText,
         );
       },
@@ -490,6 +491,7 @@ class _TerminalView extends LeafRenderObjectWidget {
     required this.cursorType,
     required this.alwaysShowCursor,
     this.onEditableRect,
+    this.inputConnectionOpen,
     this.composingText,
   });
 
@@ -517,6 +519,10 @@ class _TerminalView extends LeafRenderObjectWidget {
 
   final EditableRectCallback? onEditableRect;
 
+  /// Reports whether an IME input connection is open; when it returns false
+  /// [RenderTerminal] skips the editable-rect geometry math entirely.
+  final ValueGetter<bool>? inputConnectionOpen;
+
   final String? composingText;
 
   @override
@@ -534,6 +540,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       cursorType: cursorType,
       alwaysShowCursor: alwaysShowCursor,
       onEditableRect: onEditableRect,
+      inputConnectionOpen: inputConnectionOpen,
       composingText: composingText,
     );
   }
@@ -553,6 +560,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..cursorType = cursorType
       ..alwaysShowCursor = alwaysShowCursor
       ..onEditableRect = onEditableRect
+      ..inputConnectionOpen = inputConnectionOpen
       ..composingText = composingText;
   }
 }
