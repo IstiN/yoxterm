@@ -1,0 +1,35 @@
+#!/bin/bash
+# yoxterm pre-commit hook: tests + CRAP ratchet.
+#
+# The CRAP score must not grow — crap4dart.yaml pins crap.threshold to the
+# current codebase max (ratchet). Lower the threshold when you reduce it.
+#
+# Install/refresh:  git config core.hooksPath scripts
+set -e
+
+FLUTTER="${FLUTTER:-$HOME/development/flutter/bin/flutter}"
+if [ ! -x "$FLUTTER" ]; then
+  FLUTTER=flutter
+fi
+
+echo "==> flutter analyze"
+"$FLUTTER" analyze --no-pub lib test
+
+echo "==> flutter test --coverage"
+"$FLUTTER" test --coverage
+
+echo "==> crap4dart ratchet (threshold pinned in crap4dart.yaml)"
+# Prefer the local crap4dart checkout (dev version); fall back to pub global.
+LOCAL_CRAP="$HOME/git/crap4dart/bin/crap4dart.dart"
+if [ -f "$LOCAL_CRAP" ]; then
+  dart "$LOCAL_CRAP" analyze
+elif dart pub global list | grep -q crap4dart; then
+  dart pub global run crap4dart analyze
+else
+  echo "crap4dart not found. Install once with ONE of:"
+  echo "  git clone https://github.com/IstiN/crap4dart ~/git/crap4dart"
+  echo "  dart pub global activate crap4dart"
+  exit 1
+fi
+
+echo "==> pre-commit OK"
