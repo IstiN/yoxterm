@@ -7,7 +7,9 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # macOS: the committed golden images are generated on macOS; Linux
+    # rasterizes text slightly differently and pixel tests would fail.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
