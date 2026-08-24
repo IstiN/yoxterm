@@ -451,9 +451,23 @@ class TerminalViewState extends State<TerminalView> {
 
     if (handled) {
       _scrollToBottom();
+      return KeyEventResult.handled;
     }
 
-    return handled ? KeyEventResult.handled : KeyEventResult.ignored;
+    // For printable characters whose logical key had no inputHandler mapping,
+    // fall through to a direct textInput so the character still reaches the
+    // terminal. We MUST return HANDLED here — otherwise the enclosing
+    // CustomKeyboardListener falls through to its own onInsert and the same
+    // character reaches onOutput twice (once from this textInput, once from
+    // the listener's onInsert -> textInput -> onOutput round-trip).
+    final character = event.character;
+    if (character != null && character.isNotEmpty) {
+      widget.terminal.textInput(character);
+      _scrollToBottom();
+      return KeyEventResult.handled;
+    }
+
+    return KeyEventResult.ignored;
   }
 
   void _onKeyboardShow() {
