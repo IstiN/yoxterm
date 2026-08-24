@@ -1,3 +1,27 @@
+## [4.1.0] - 2026-08-24
+* Byte-level input path: Terminal.writeBytes(Uint8List) decodes UTF-8 inline
+  with cross-chunk carry, the escape parser is now a persistent state machine
+  (no rollback re-parse of sequences split across chunks), and clean ASCII
+  chunks reach the buffer zero-copy. Parser AOT benchmarks: text runs -36%,
+  lines -22%, CJK -35% vs 4.0.2.
+* DEC mode 2026 synchronized output (BSU/ESU): TUI frames (neovim, btop,
+  helix, bubbletea) produce one repaint per frame instead of one per chunk,
+  with a 150ms failsafe for stalled sync regions.
+* Paint/layout cascade coalescing: one write burst now produces a single
+  paint instead of two (layout and paint ride the same frame callback).
+* Glyph-atlas rebuilds are batched per frame: missing glyphs are collected
+  across all visible lines and the atlas is rebuilt at most once per frame.
+* occ-bounded BufferLine.reset() (alacritty-style high-water mark) and a
+  single version bump per bulk op.
+* Stick-to-bottom fixes: programmatic scroll-to-bottom targets the live
+  extent, half-line stick tolerance, disarm of stale user-scroll anchors.
+* TerminalView no longer renders its own scrollbar (host provides its own
+  themed one) and claims printable keys as handled so the enclosing listener
+  cannot double-insert characters.
+* Main-buffer resize debounce reduced 150ms -> 60ms (frozen panel on window
+  resize settles within a frame or two).
+* 1386 tests, CI + CRAP gate green.
+
 ## [4.0.2] - 2026-08-24
 * Add `RenderTerminal.forceResizeTerminal()`: cancels the resize debounce and
   immediately re-pushes the current viewport size to the terminal. Needed when
