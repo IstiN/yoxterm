@@ -89,6 +89,14 @@ What changed under the hood:
   </tr>
 </table>
 
+## Performance
+
+- 📊 [Performance history, current state, and roadmap](docs/PERFORMANCE.md) —
+  every change from `xterm.dart 4.0.0` to `yoxterm 4.1.0` with measured
+  impact, an Alacritty portability table, and a cross-terminal research
+  summary (ghostty, kitty, Rio, WezTerm, iTerm2, Contour, st) with the
+  five Flutter-feasible ports we have not yet shipped.
+
 ## Features
 
 - 📦 **Works out of the box** — no special configuration required.
