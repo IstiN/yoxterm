@@ -21,34 +21,50 @@ hot paths: parsing, painting and scrolling.
 ## Why yoxterm over xterm.dart
 
 Measured by `flutter test test/src/ui/perf_benchmark_test.dart` and
-`test/src/ui/draw_ops_bench_test.dart` (Apple Silicon; absolute numbers are
+`test/src/ui/draw_ops_bench_test.dart`, plus AOT microbenchmarks in
+`script/benchmark.dart` (Apple Silicon; absolute numbers are
 machine-dependent, the deltas are not):
 
 | Hot path | upstream-style | yoxterm | |
 |---|---|---|---|
-| Plain-text parse flood | 73.9 MB/s (byte-at-a-time parser) | **98.3 MB/s** (+33%) | parser bypass fast path |
+| Plain-text parse flood | 73.9 MB/s (byte-at-a-time parser) | **103 MB/s** (+39%) | persistent byte parser + zero-copy fast path |
+| Parser, text-heavy runs (AOT) | rollback re-parse per chunk | **−36%** vs yoxterm 4.0.2 | state survives across chunks |
+| Parser, CJK runs (AOT) | per-chunk `utf8.decode` + re-scan | **−35%** vs yoxterm 4.0.2 | inline incremental UTF-8 decode |
+| End-to-end `writeBytes` (64 KiB chunks) | `utf8.decode` + String write | **−16%** | one decode+parse pass per flush |
 | Canvas ops per htop frame (1920 cells) | 1714 (218 rects + 1496 paragraphs) | **49** (~35× fewer) | run merging + glyph atlas |
-| Frame paint under output flood | — | **49 µs/frame** | atlas hits, no layout |
-| Idle frame repaint | — | **45 µs/frame** | recorded-op replay, zero rebuilds |
+| Frame paint under output flood | — | **50 µs/frame** | atlas hits, no layout |
+| Idle frame repaint | — | **36 µs/frame** | recorded-op replay, zero rebuilds |
+| Partial damage (2/24 lines changed) | — | **37 µs/frame** | version-based line damage |
+| TUI frame (neovim/btop, mode 2026) | repaint per PTY chunk | **1 repaint per TUI frame** | BSU/ESU + 150 ms failsafe |
 
 What changed under the hood:
 
+- **Byte-level input path** — `Terminal.writeBytes(Uint8List)` decodes UTF-8
+  inline with cross-chunk carry (split multibyte sequences parse once), the
+  escape parser is a persistent state machine with no rollback re-parse, and
+  clean ASCII chunks reach the buffer zero-copy.
+- **Synchronized output (DEC mode 2026)** — BSU/ESU-wrapped TUI frames
+  (neovim, btop, helix, bubbletea) produce exactly one repaint per frame
+  instead of one per PTY chunk; a 150 ms failsafe aborts stalled syncs.
 - **Glyph-atlas renderer** — glyphs are rasterized once into a texture atlas
   and emitted as batched `drawRawAtlas` sprite calls instead of one
-  `Paragraph` per text run. Box-drawing characters are painted procedurally.
+  `Paragraph` per text run. Missing glyphs are collected across the whole
+  frame and the atlas is rebuilt at most once per frame. Box-drawing
+  characters are painted procedurally.
 - **Pooled paint ops** — per-line paint operations are recorded once and
   replayed for unchanged lines; evicted ops are recycled through an object
   pool (XRecycler-style) instead of being re-allocated every frame.
 - **Parser bypass fast path** — plain-text chunks without control characters
   skip the escape parser entirely; scrollback lines are recycled rather than
-  re-allocated.
+  re-allocated, and line resets only touch the occupied prefix
+  (alacritty-style high-water mark).
 - **Listener fast paths** — observable terminal notifications avoid
   allocation and iteration overhead when nothing is subscribed.
 - **Output paint throttle** — painting is capped at display refresh instead
   of repainting on every PTY read, so a 120 Hz ProMotion display does not
   double the paint work.
 - **Quality ratchet** — CI and a pre-commit hook enforce `flutter analyze`,
-  the full test suite (~1300 tests) and a
+  the full test suite (~1400 tests) and a
   [crap4dart](https://github.com/IstiN/crap4dart) CRAP gate
   (threshold 61, current max 59) so performance debt cannot grow back.
 
