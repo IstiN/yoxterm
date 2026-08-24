@@ -149,6 +149,8 @@ abstract class EscapeHandler {
 
   void setBracketedPasteMode(bool enabled);
 
+  void setSyncOutputMode(bool enabled);
+
   void setUnknownDecMode(int mode, bool enabled);
 
   void resize(int cols, int rows);

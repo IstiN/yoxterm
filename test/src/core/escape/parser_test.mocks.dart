@@ -580,6 +580,14 @@ class MockEscapeHandler extends _i1.Mock implements _i2.EscapeHandler {
         returnValueForMissingStub: null,
       );
   @override
+  void setSyncOutputMode(bool? enabled) => super.noSuchMethod(
+        Invocation.method(
+          #setSyncOutputMode,
+          [enabled],
+        ),
+        returnValueForMissingStub: null,
+      );
+  @override
   void setUnknownDecMode(
     int? mode,
     bool? enabled,

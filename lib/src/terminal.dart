@@ -1,3 +1,4 @@
+import 'dart:async' show Timer;
 import 'dart:math' show max;
 
 import 'package:yoxterm/src/base/observable.dart';
@@ -156,6 +157,15 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
 
   bool _bracketedPasteMode = false;
 
+  bool _syncOutputMode = false;
+
+  /// Failsafe that force-flushes a stalled synchronized update (DEC mode
+  /// 2026) when the application never sends the ESU. Matches the 150ms sync
+  /// timeout of alacritty's vte parser.
+  Timer? _syncFailsafeTimer;
+
+  static const _syncOutputTimeout = Duration(milliseconds: 150);
+
   /* State getters */
 
   /// Number of cells in a terminal row.
@@ -211,6 +221,9 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   @override
   bool get bracketedPasteMode => _bracketedPasteMode;
 
+  @override
+  bool get syncOutputMode => _syncOutputMode;
+
   /// Current active buffer of the terminal. This is initially [mainBuffer] and
   /// can be switched back and forth from [altBuffer] to [mainBuffer] when
   /// the underlying program requests it.
@@ -248,11 +261,28 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
         _precedingCodepoint = _lastCodepoint(data);
       }
       _buffer.write(data);
-      notifyListeners();
+      _notifyOutput();
       return;
     }
     _parser.write(data);
+    _notifyOutput();
+  }
+
+  /// Notifies listeners that output was written, unless a synchronized
+  /// update (DEC mode 2026) is in progress. While it is, output still
+  /// mutates the buffer but repaint notifications are deferred until the ESU
+  /// (or the failsafe in [setSyncOutputMode]) flushes the whole frame at
+  /// once, avoiding partial-frame repaints from TUI applications.
+  void _notifyOutput() {
+    if (_syncOutputMode) return;
     notifyListeners();
+  }
+
+  /// Cancels the pending synchronized-output failsafe timer. Safe to call
+  /// multiple times.
+  void dispose() {
+    _syncFailsafeTimer?.cancel();
+    _syncFailsafeTimer = null;
   }
 
   /// The last code point of [data], equivalent to `data.runes.last` but
@@ -825,6 +855,29 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   @override
   void setBracketedPasteMode(bool enabled) {
     _bracketedPasteMode = enabled;
+  }
+
+  @override
+  void setSyncOutputMode(bool enabled) {
+    if (enabled == _syncOutputMode) return;
+    _syncOutputMode = enabled;
+    if (enabled) {
+      _syncFailsafeTimer?.cancel();
+      _syncFailsafeTimer = Timer(_syncOutputTimeout, _syncOutputFailsafe);
+    } else {
+      _syncFailsafeTimer?.cancel();
+      _syncFailsafeTimer = null;
+      // ESU: no explicit flush here — [write] notifies once after the parser
+      // returns, now that [_syncOutputMode] no longer suppresses it.
+    }
+  }
+
+  /// Aborts a stalled synchronized update: the application sent a BSU but no
+  /// ESU within [_syncOutputTimeout], so force a repaint of what accumulated.
+  void _syncOutputFailsafe() {
+    _syncFailsafeTimer = null;
+    _syncOutputMode = false;
+    notifyListeners();
   }
 
   @override

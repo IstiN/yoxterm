@@ -683,6 +683,14 @@ void main() {
       ]);
     });
 
+    test('mode 2026 toggles synchronized output', () {
+      parser.write('\x1b[?2026h\x1b[?2026l');
+      expect(handler.calls, [
+        'setSyncOutputMode(true)',
+        'setSyncOutputMode(false)',
+      ]);
+    });
+
     test('unknown DEC mode is forwarded to setUnknownDecMode', () {
       parser.write('\x1b[?9001h\x1b[?9001l');
       expect(handler.calls, [

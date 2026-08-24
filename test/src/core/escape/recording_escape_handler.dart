@@ -233,6 +233,10 @@ class RecordingEscapeHandler implements EscapeHandler {
       _record('setBracketedPasteMode', [enabled]);
 
   @override
+  void setSyncOutputMode(bool enabled) =>
+      _record('setSyncOutputMode', [enabled]);
+
+  @override
   void setUnknownDecMode(int mode, bool enabled) =>
       _record('setUnknownDecMode', [mode, enabled]);
 

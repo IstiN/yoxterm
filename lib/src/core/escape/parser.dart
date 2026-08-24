@@ -1074,6 +1074,8 @@ class EscapeParser {
         return;
       case 2004:
         return handler.setBracketedPasteMode(enabled);
+      case 2026:
+        return handler.setSyncOutputMode(enabled);
       default:
         return handler.setUnknownDecMode(mode, enabled);
     }

@@ -222,6 +222,8 @@ void main() {
       '\x1b[?1049l': ['useMainBuffer'],
       '\x1b[?2004h': ['setBracketedPasteMode(true)'],
       '\x1b[?2004l': ['setBracketedPasteMode(false)'],
+      '\x1b[?2026h': ['setSyncOutputMode(true)'],
+      '\x1b[?2026l': ['setSyncOutputMode(false)'],
 
       // SGR styles
       '\x1b[m': ['resetCursorStyle'],

@@ -60,4 +60,7 @@ class FakeTerminalState implements TerminalState {
 
   @override
   bool bracketedPasteMode = false;
+
+  @override
+  bool syncOutputMode = false;
 }
