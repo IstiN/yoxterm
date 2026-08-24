@@ -218,16 +218,21 @@ class TerminalViewState extends State<TerminalView> {
 
   @override
   Widget build(BuildContext context) {
-    Widget child = Scrollable(
-      key: _scrollableKey,
-      controller: _scrollController,
-      viewportBuilder: (context, offset) {
-        return _TerminalView(
-          key: _viewportKey,
-          terminal: widget.terminal,
-          controller: _controller,
-          offset: offset,
-          padding: MediaQuery.of(context).padding,
+    Widget child = ScrollConfiguration(
+      // Host applications typically provide their own themed scrollbar
+      // (e.g. yoloit's purple RawScrollbar). Suppress xterm's inner
+      // scrollbar so we don't render two bars side by side.
+      behavior: const _NoScrollbarScrollBehavior(),
+      child: Scrollable(
+        key: _scrollableKey,
+        controller: _scrollController,
+        viewportBuilder: (context, offset) {
+          return _TerminalView(
+            key: _viewportKey,
+            terminal: widget.terminal,
+            controller: _controller,
+            offset: offset,
+            padding: MediaQuery.of(context).padding,
           autoResize: widget.autoResize,
           textStyle: widget.textStyle,
           textScaler: widget.textScaler ?? MediaQuery.textScalerOf(context),
@@ -240,6 +245,7 @@ class TerminalViewState extends State<TerminalView> {
           composingText: _composingText,
         );
       },
+      ),
     );
 
     child = TerminalScrollGestureHandler(
@@ -579,5 +585,21 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..onEditableRect = onEditableRect
       ..inputConnectionOpen = inputConnectionOpen
       ..composingText = composingText;
+  }
+}
+
+/// Scroll behavior that suppresses the default scrollbar. The host
+/// application provides its own themed scrollbar (see yoloit's purple
+/// RawScrollbar); without this, two scrollbars render side by side.
+class _NoScrollbarScrollBehavior extends ScrollBehavior {
+  const _NoScrollbarScrollBehavior();
+
+  @override
+  Widget buildScrollbar(
+    BuildContext context,
+    Widget child,
+    ScrollableDetails details,
+  ) {
+    return child;
   }
 }
