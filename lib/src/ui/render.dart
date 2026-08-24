@@ -474,6 +474,28 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     );
   }
 
+  /// Re-applies the current viewport size to the terminal even when this
+  /// render object's own size did not change. Needed when another widget
+  /// attached to the same terminal resized it to different dimensions (e.g.
+  /// a fullscreen view was closed and this widget became the active binding
+  /// again): without this, the terminal keeps the other widget's dimensions
+  /// and this viewport renders stale/clipped content until the next manual
+  /// resize. Also re-clamps the scroll offset and requests a repaint.
+  void forceResizeTerminal() {
+    if (!_autoResize || _viewportSize == null) return;
+    _altResizeDebounce?.cancel();
+    _altResizeDebounce = null;
+    _pendingViewportSize = null;
+    _terminal.resize(
+      _viewportSize!.width,
+      _viewportSize!.height,
+      _painter.cellSize.width.round(),
+      _painter.cellSize.height.round(),
+    );
+    _updateScrollOffset();
+    markNeedsPaint();
+  }
+
   /// Update the scroll offset based on the current terminal state. This should
   /// be called in [performLayout] after the viewport size has been updated.
   void _updateScrollOffset() {
