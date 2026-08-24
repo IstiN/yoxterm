@@ -63,6 +63,40 @@ class ByteConsumer {
     _length += runes.length;
   }
 
+  /// Adds already-decoded Unicode code points, taking ownership of [data]:
+  /// the caller must not mutate or reuse the list afterwards. Used by the
+  /// byte-level input path, where an incremental UTF-8 decoder has already
+  /// produced code points, so no surrogate stitching is applied here.
+  void addCodepoints(List<int> data) {
+    if (data.isEmpty) return;
+    _queue.addLast(data);
+    _length += data.length;
+  }
+
+  /// The block at the head of the queue, for bulk consumption together with
+  /// [headOffset] and [advance]. Throws a StateError when the queue is empty
+  /// — check [isNotEmpty] first. The returned list must not be retained or
+  /// mutated.
+  List<int> get headBlock => _queue.first;
+
+  /// Offset of the next unconsumed code point within [headBlock].
+  int get headOffset => _currentOffset;
+
+  /// Consumes [count] code points from the head block. [count] must not
+  /// exceed the number of code points remaining in the head block
+  /// (`headBlock.length - headOffset`).
+  void advance(int count) {
+    _currentOffset += count;
+    _length -= count;
+    _totalConsumed += count;
+    // Pop the head block if it is exhausted, so that [headBlock] and
+    // [headOffset] always describe valid input while the queue is not empty.
+    if (_length > 0 && _currentOffset >= _queue.first.length) {
+      _consumed.add(_queue.removeFirst());
+      _currentOffset = 0;
+    }
+  }
+
   int peek() {
     final data = _queue.first;
     if (_currentOffset < data.length) {

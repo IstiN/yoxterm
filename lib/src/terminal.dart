@@ -1,5 +1,6 @@
 import 'dart:async' show Timer;
 import 'dart:math' show max;
+import 'dart:typed_data' show Uint8List;
 
 import 'package:yoxterm/src/base/observable.dart';
 import 'package:yoxterm/src/core/buffer/buffer.dart';
@@ -20,13 +21,14 @@ import 'package:yoxterm/src/core/state.dart';
 import 'package:yoxterm/src/core/tabs.dart';
 import 'package:yoxterm/src/utils/ascii.dart';
 import 'package:yoxterm/src/utils/circular_buffer.dart';
+import 'package:yoxterm/src/utils/utf8_stream_decoder.dart';
 
 /// [Terminal] is an interface to interact with command line applications. It
 /// translates escape sequences from the application into updates to the
 /// [buffer] and events such as [onTitleChange] or [onBell], as well as
 /// translating user input into escape sequences that the application can
 /// understand.
-class Terminal with Observable implements TerminalState, EscapeHandler {
+class Terminal with Observable implements TerminalState, EscapeHandler, TextRunHandler {
   /// The number of lines that the scrollback buffer can hold. If the buffer
   /// exceeds this size, the lines at the top of the buffer will be removed.
   ///
@@ -92,6 +94,15 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   }) : maxLines = max(maxLines, _defaultViewHeight);
 
   late final _parser = EscapeParser(this);
+
+  /// Incremental UTF-8 decoder backing [writeBytes]. Persists incomplete
+  /// multibyte sequences across chunks so they are reassembled, not replaced.
+  final _utf8Decoder = Utf8StreamDecoder();
+
+  /// Scratch buffer for the code points decoded by [writeBytes]. Reused
+  /// across calls on the fast path; on the parser path ownership passes to
+  /// the parser's queue and a fresh scratch is allocated.
+  var _decodeScratch = <int>[];
 
   final _emitter = const EscapeEmitter();
 
@@ -247,6 +258,15 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   /// updates the states of the terminal and emits events such as [onBell] or
   /// [onTitleChange] when the escape sequences in [data] request it.
   void write(String data) {
+    // A UTF-8 sequence left incomplete by writeBytes can never be completed
+    // by a String chunk; flush it as U+FFFD through the parser to keep the
+    // output ordered. Interleaving write/writeBytes is not supported — this
+    // only bounds the damage.
+    if (_utf8Decoder.hasPendingBytes) {
+      _utf8Decoder.reset();
+      _parser.writeCodepoints(const [0xFFFD]);
+    }
+
     // Fast path: if the chunk contains nothing the parser would dispatch on
     // (no escape byte, no C0 control characters, no dangling surrogate half)
     // and the parser isn't holding back bytes from a previous chunk, write
@@ -265,6 +285,87 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
       return;
     }
     _parser.write(data);
+    _notifyOutput();
+  }
+
+  /// Writes raw bytes from the underlying program to the terminal. This is
+  /// the byte-level counterpart of [write]: UTF-8 is decoded incrementally,
+  /// so a multibyte sequence split across two calls is reassembled instead of
+  /// being replaced by U+FFFD on both sides (which is what per-chunk
+  /// `utf8.decode` does). Malformed bytes decode to U+FFFD exactly like
+  /// `utf8.decode(bytes, allowMalformed: true)`.
+  ///
+  /// A chunk without multibyte content is never decoded at all: bytes below
+  /// 0x80 are their own code points, so one classifying scan decides between
+  /// the fast path (bytes go straight to the buffer — no String, no code
+  /// point list) and the parser. Only chunks that actually contain multibyte
+  /// UTF-8 pay for decoding, with the control-character scan fused into it.
+  ///
+  /// Note: [data] may be retained by the parser (when a chunk ends mid
+  /// sequence), so do not mutate or reuse the buffer after the call — pass a
+  /// fresh buffer per chunk, like socket and file reads do.
+  ///
+  /// Do not interleave [writeBytes] with [write] on the same terminal: the
+  /// two entry points track split sequences separately and interleaving them
+  /// can reorder output.
+  void writeBytes(Uint8List data) {
+    if (!_utf8Decoder.hasPendingBytes) {
+      // Classify the chunk in a single pass. Stops early at the first
+      // multibyte lead byte — such chunks go through the decoder, which
+      // re-detects control characters while decoding.
+      var asciiOnly = true;
+      var hasControlChars = false;
+      for (var i = 0; i < data.length; i++) {
+        final byte = data[i];
+        if (byte >= 0x80) {
+          asciiOnly = false;
+          break;
+        }
+        if (byte < 0x20 || byte == 0x7F) {
+          hasControlChars = true;
+        }
+      }
+
+      if (asciiOnly) {
+        if (!hasControlChars && !_parser.hasPendingInput) {
+          // Fast path: plain text. The bytes are already code points
+          // (Uint8List is a List<int>), so the buffer consumes them
+          // zero-copy.
+          if (data.isNotEmpty) {
+            _precedingCodepoint = data.last;
+          }
+          _buffer.writeCodepoints(data);
+          _notifyOutput();
+          return;
+        }
+        // Pure ASCII with escapes or controls: the parser consumes the bytes
+        // as code points directly, again without a decoding pass.
+        _parser.writeCodepoints(data);
+        _notifyOutput();
+        return;
+      }
+    }
+
+    // Multibyte content (or a sequence still pending from the previous
+    // chunk): decode incrementally into the scratch buffer.
+    final codepoints = _decodeScratch;
+    _utf8Decoder.decodeInto(data, codepoints);
+
+    if (!_parser.hasPendingInput && !_utf8Decoder.lastChunkHasControlChars) {
+      // Fast path: decoded text with nothing the parser would dispatch on.
+      if (codepoints.isNotEmpty) {
+        _precedingCodepoint = codepoints.last;
+      }
+      _buffer.writeCodepoints(codepoints);
+      codepoints.clear();
+      _notifyOutput();
+      return;
+    }
+
+    // The parser's queue stores the list, so hand over ownership and start a
+    // fresh scratch buffer for the next chunk.
+    _decodeScratch = <int>[];
+    _parser.writeCodepoints(codepoints);
     _notifyOutput();
   }
 
@@ -494,6 +595,12 @@ class Terminal with Observable implements TerminalState, EscapeHandler {
   void writeChar(int char) {
     _precedingCodepoint = char;
     _buffer.writeChar(char);
+  }
+
+  @override
+  void writeChars(List<int> chars, int start, int end) {
+    _precedingCodepoint = chars[end - 1];
+    _buffer.writeCodepoints(chars, start, end);
   }
 
   /* SBC */

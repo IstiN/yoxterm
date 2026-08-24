@@ -114,6 +114,22 @@ class Buffer {
     }
   }
 
+  /// Writes already-decoded Unicode code points to the buffer. Terminal
+  /// sequences or special characters are not interpreted and directly added
+  /// to the buffer. Unlike [write], no UTF-16 surrogate stitching is needed —
+  /// the input is already a list of code points.
+  ///
+  /// Only the code points in `codepoints[start..end)` are written; the range
+  /// defaults to the whole list.
+  ///
+  /// See also: [Terminal.writeBytes]
+  void writeCodepoints(List<int> codepoints, [int start = 0, int? end]) {
+    final rangeEnd = end ?? codepoints.length;
+    for (var i = start; i < rangeEnd; i++) {
+      writeChar(codepoints[i]);
+    }
+  }
+
   /// Writes a single character to the _terminal. Escape sequences or special
   /// characters are not interpreted and directly added to the buffer.
   ///

@@ -11,25 +11,48 @@ import 'package:yoxterm/src/utils/lookup_table.dart';
 ///
 /// Design goals:
 ///  * Zero object allocation during processing.
-///  * No internal state. Same input will always produce same output.
+///  * Persistent state: an escape sequence split across [write] calls is
+///    parsed incrementally. The partially parsed state is kept between calls,
+///    so the completed prefix is never rolled back and re-parsed.
 class EscapeParser {
   final EscapeHandler handler;
 
-  EscapeParser(this.handler);
+  EscapeParser(this.handler)
+      : _textRunHandler =
+            handler is TextRunHandler ? handler as TextRunHandler : null;
 
   final _queue = ByteConsumer();
+
+  /// [handler] cast to [TextRunHandler] when it supports bulk text delivery,
+  /// null otherwise.
+  final TextRunHandler? _textRunHandler;
+
+  /// Parser state persisted across [write] calls. Anything but
+  /// [_ParserState.ground] means an escape sequence is only partially
+  /// consumed and will be continued by the next chunk.
+  var _state = _ParserState.ground;
 
   /// Start of sequence or character being processed. Useful for debugging.
   var tokenBegin = 0;
 
+  /// Start of the escape sequence currently being accumulated, used to keep
+  /// [tokenBegin]/[tokenEnd] pointing at the whole sequence once it completes.
+  var _sequenceBegin = 0;
+
   /// End of sequence or character being processed. Useful for debugging.
-  int get tokenEnd => _queue.totalConsumed;
+  /// While a sequence is incomplete this stays at the sequence start, so a
+  /// held-back sequence does not advance the token position.
+  int get tokenEnd =>
+      _state == _ParserState.ground ? _queue.totalConsumed : _sequenceBegin;
 
   /// Whether the parser is holding back input from previous [write] calls:
   /// an incomplete escape sequence or the high half of a surrogate pair
   /// split across chunks. While this is true, new input must go through the
   /// parser so the held-back bytes are not reordered behind it.
-  bool get hasPendingInput => _queue.isNotEmpty || _queue.hasPendingSurrogate;
+  bool get hasPendingInput =>
+      _state != _ParserState.ground ||
+      _queue.isNotEmpty ||
+      _queue.hasPendingSurrogate;
 
   void write(String chunk) {
     _queue.unrefConsumedBlocks();
@@ -37,20 +60,111 @@ class EscapeParser {
     _process();
   }
 
-  void _process() {
-    while (_queue.isNotEmpty) {
-      tokenBegin = _queue.totalConsumed;
-      final char = _queue.consume();
+  /// Feeds already-decoded Unicode code points into the parser, taking
+  /// ownership of [codepoints]: the caller must not mutate or reuse the list
+  /// afterwards. This is the entry point of the byte-level input path
+  /// ([Terminal.writeBytes]), where UTF-8 decoding happens upstream of the
+  /// parser and no String materializes at all.
+  void writeCodepoints(List<int> codepoints) {
+    _queue.unrefConsumedBlocks();
+    _queue.addCodepoints(codepoints);
+    _process();
+  }
 
-      if (char == Ascii.ESC) {
-        final processed = _processEscape();
-        if (!processed) {
-          _queue.rollback(tokenEnd - tokenBegin);
-          return;
-        }
-      } else {
-        _processChar(char);
+  void _process() {
+    while (true) {
+      switch (_state) {
+        case _ParserState.ground:
+          if (_queue.isEmpty) return;
+
+          final runHandler = _textRunHandler;
+          if (runHandler != null) {
+            // Bulk path: scan the maximal run of literal text in the head
+            // block and deliver it in one call, without per-character
+            // consume bookkeeping. Only characters with a parser-level
+            // dispatch — C0 controls below 0x10 and ESC — stop a run;
+            // everything else (including DEL, C1 and 0x10–0x1A, which
+            // _processChar forwards to writeChar) is text.
+            final head = _queue.headBlock;
+            final start = _queue.headOffset;
+            var end = start;
+            while (end < head.length) {
+              final next = head[end];
+              if (next <= 0x0F || next == Ascii.ESC) break;
+              end++;
+            }
+            if (end > start) {
+              tokenBegin = _queue.totalConsumed;
+              _queue.advance(end - start);
+              runHandler.writeChars(head, start, end);
+              break;
+            }
+
+            // The head character is a C0 control or ESC: dispatch it
+            // directly — the scan already read it.
+            tokenBegin = _queue.totalConsumed;
+            if (start < head.length) {
+              final char = head[start];
+              _queue.advance(1);
+              _dispatchGroundChar(char);
+            } else {
+              // The head block was exhausted by consume()-based sequence
+              // parsing (consume() pops blocks lazily); let consume() move
+              // to the next block.
+              _dispatchGroundChar(_queue.consume());
+            }
+            break;
+          }
+
+          tokenBegin = _queue.totalConsumed;
+          final char = _queue.consume();
+          _dispatchGroundChar(char);
+          break;
+        case _ParserState.esc:
+          if (_queue.isEmpty) return;
+          _processEscapeChar(_queue.consume());
+          break;
+        case _ParserState.csi:
+          if (!_processCsiState()) return;
+          break;
+        case _ParserState.osc:
+          if (!_consumeOsc()) return;
+          _finishSequence();
+          _dispatchOsc();
+          break;
+        case _ParserState.charset0:
+          if (_queue.isEmpty) return;
+          final name = _queue.consume();
+          _finishSequence();
+          handler.designateCharset(0, name);
+          break;
+        case _ParserState.charset1:
+          if (_queue.isEmpty) return;
+          final name = _queue.consume();
+          _finishSequence();
+          handler.designateCharset(1, name);
+          break;
       }
+    }
+  }
+
+  /// Marks the current escape sequence as fully processed and returns the
+  /// parser to the ground state. Called before the sequence's handler
+  /// callback runs, so callbacks that inspect [tokenBegin]/[tokenEnd] see the
+  /// completed sequence's range.
+  void _finishSequence() {
+    tokenBegin = _sequenceBegin;
+    _state = _ParserState.ground;
+  }
+
+  /// Dispatches a single character consumed in the ground state: [Ascii.ESC]
+  /// enters the escape state, everything else goes to [_processChar].
+  void _dispatchGroundChar(int char) {
+    if (char == Ascii.ESC) {
+      _sequenceBegin = tokenBegin;
+      _state = _ParserState.esc;
+    } else {
+      _processChar(char);
     }
   }
 
@@ -69,20 +183,20 @@ class EscapeParser {
     sbcHandler();
   }
 
-  /// Processes a sequence of characters that starts with an escape character.
-  /// Returns [true] if the sequence was processed, [false] if it was not.
-  bool _processEscape() {
-    if (_queue.isEmpty) return false;
-
-    final escapeChar = _queue.consume();
+  /// Dispatches the character following an escape character to the
+  /// corresponding handler. Handlers either complete the sequence (via
+  /// [_finishSequence]) or switch [_state] to keep parsing with the next
+  /// chunk.
+  void _processEscapeChar(int escapeChar) {
     final escapeHandler = _escHandlers[escapeChar];
 
     if (escapeHandler == null) {
+      _finishSequence();
       handler.unkownEscape(escapeChar);
-      return true;
+      return;
     }
 
-    return escapeHandler();
+    escapeHandler();
   }
 
   late final _sbcHandlers = FastLookupTable<_SbcHandler>({
@@ -120,85 +234,116 @@ class EscapeParser {
   /// `ESC 7` Save Cursor (DECSC)
   ///
   /// https://terminalguide.namepad.de/seq/a_esc_a7/
-  bool _escHandleSaveCursor() {
+  void _escHandleSaveCursor() {
+    _finishSequence();
     handler.saveCursor();
-    return true;
   }
 
   /// `ESC 8` Restore Cursor (DECRC)
   ///
   /// https://terminalguide.namepad.de/seq/a_esc_a8/
-  bool _escHandleRestoreCursor() {
+  void _escHandleRestoreCursor() {
+    _finishSequence();
     handler.restoreCursor();
-    return true;
   }
 
   /// `ESC D` Index (IND)
   ///
   /// https://terminalguide.namepad.de/seq/a_esc_cd/
-  bool _escHandleIndex() {
+  void _escHandleIndex() {
+    _finishSequence();
     handler.index();
-    return true;
   }
 
   /// `ESC E` Next Line (NEL)
   ///
   /// https://terminalguide.namepad.de/seq/a_esc_ce/
-  bool _escHandleNextLine() {
+  void _escHandleNextLine() {
+    _finishSequence();
     handler.nextLine();
-    return true;
   }
 
   /// `ESC H` Horizontal Tab Set (HTS)
   ///
   /// https://terminalguide.namepad.de/seq/a_esc_ch/
-  bool _escHandleTabSet() {
+  void _escHandleTabSet() {
+    _finishSequence();
     handler.setTapStop();
-    return true;
   }
 
   /// `ESC M` Reverse Index (RI)
   ///
   /// https://terminalguide.namepad.de/seq/a_esc_cm/
-  bool _escHandleReverseIndex() {
+  void _escHandleReverseIndex() {
+    _finishSequence();
     handler.reverseIndex();
-    return true;
   }
 
-  bool _escHandleDesignateCharset0() {
-    if (_queue.isEmpty) return false;
-    int name = _queue.consume();
-    handler.designateCharset(0, name);
-    return true;
+  void _escHandleDesignateCharset0() {
+    // The charset name arrives with the next input; see the charset0 state.
+    _state = _ParserState.charset0;
   }
 
-  bool _escHandleDesignateCharset1() {
-    if (_queue.isEmpty) return false;
-    int name = _queue.consume();
-    handler.designateCharset(1, name);
-    return true;
+  void _escHandleDesignateCharset1() {
+    // The charset name arrives with the next input; see the charset1 state.
+    _state = _ParserState.charset1;
   }
 
   /// `ESC =` Set Application Keypad Mode (DECKPAM)
   ///
   /// https://terminalguide.namepad.de/seq/a_esc_x3d_equals/
-  bool _escHandleSetAppKeypadMode() {
+  void _escHandleSetAppKeypadMode() {
+    _finishSequence();
     handler.setAppKeypadMode(true);
-    return true;
   }
 
   /// `ESC >` Reset Application Keypad Mode (DECKPNM)
   ///
   /// https://terminalguide.namepad.de/seq/a_esc_x3c_greater_than/
-  bool _escHandleResetAppKeypadMode() {
+  void _escHandleResetAppKeypadMode() {
+    _finishSequence();
     handler.setAppKeypadMode(false);
+  }
+
+  void _escHandleCSI() {
+    // Reset the accumulated CSI state and keep parsing in the csi state,
+    // possibly across chunk boundaries.
+    _csi.params.clear();
+    _csi.prefix = null;
+    _csiPrefixParsed = false;
+    _csiParam = 0;
+    _csiHasParam = false;
+    _state = _ParserState.csi;
+  }
+
+  /// The last parsed [_Csi]. This is a mutable singletion by design to reduce
+  /// object allocations.
+  final _csi = _Csi(finalByte: 0, params: []);
+
+  /// Whether the optional prefix (`:`..`?`) of the CSI being accumulated has
+  /// been inspected yet.
+  var _csiPrefixParsed = false;
+
+  /// The parameter currently being accumulated. Digits are folded into it as
+  /// they arrive; it is flushed to [_Csi.params] on `;` or the final byte.
+  var _csiParam = 0;
+
+  /// Whether any digit of the current parameter has been seen. Deliberately
+  /// not reset on `;`: once true, empty parameters are flushed as implicit 0.
+  var _csiHasParam = false;
+
+  /// Continues the CSI at the head of the queue and dispatches it when
+  /// complete. Returns false — leaving the parser in the csi state — when
+  /// more input is needed.
+  bool _processCsiState() {
+    if (!_consumeCsi()) return false;
+    _finishSequence();
+    _dispatchCsi();
     return true;
   }
 
-  bool _escHandleCSI() {
-    final consumed = _consumeCsi();
-    if (!consumed) return false;
-
+  /// Dispatches the completed [_csi] to its handler.
+  void _dispatchCsi() {
     final csiHandler = _csiHandlers[_csi.finalByte];
 
     if (csiHandler == null) {
@@ -206,36 +351,29 @@ class EscapeParser {
     } else {
       csiHandler();
     }
-
-    return true;
   }
 
-  /// The last parsed [_Csi]. This is a mutable singletion by design to reduce
-  /// object allocations.
-  final _csi = _Csi(finalByte: 0, params: []);
-
-  /// Parse a CSI from the head of the queue. Return false if the CSI isn't
-  /// complete. After a CSI is successfully parsed, [_csi] is updated.
+  /// Consumes more of the CSI at the head of the queue, continuing where the
+  /// previous chunk left off. Returns false if the CSI isn't complete yet; in
+  /// that case the partially parsed state is kept so the completed prefix is
+  /// never re-parsed. After a CSI is successfully parsed, [_csi] is updated.
   bool _consumeCsi() {
-    if (_queue.isEmpty) {
-      return false;
+    // Test whether the csi is a `CSI ? Ps ...` or `CSI Ps ...`. Done once per
+    // sequence, not once per chunk.
+    if (!_csiPrefixParsed) {
+      if (_queue.isEmpty) {
+        return false;
+      }
+      _csiPrefixParsed = true;
+      final prefix = _queue.peek();
+      if (prefix >= Ascii.colon && prefix <= Ascii.questionMark) {
+        _csi.prefix = prefix;
+        _queue.consume();
+      }
     }
 
-    _csi.params.clear();
-
-    // test whether the csi is a `CSI ? Ps ...` or `CSI Ps ...`
-    final prefix = _queue.peek();
-    if (prefix >= Ascii.colon && prefix <= Ascii.questionMark) {
-      _csi.prefix = prefix;
-      _queue.consume();
-    } else {
-      _csi.prefix = null;
-    }
-
-    var param = 0;
-    var hasParam = false;
     while (true) {
-      // The sequence isn't completed, just ignore it.
+      // The sequence isn't complete yet; wait for more input.
       if (_queue.isEmpty) {
         return false;
       }
@@ -243,17 +381,17 @@ class EscapeParser {
       final char = _queue.consume();
 
       if (char == Ascii.semicolon) {
-        if (hasParam) {
-          _csi.params.add(param);
+        if (_csiHasParam) {
+          _csi.params.add(_csiParam);
         }
-        param = 0;
+        _csiParam = 0;
         continue;
       }
 
       if (char >= Ascii.num0 && char <= Ascii.num9) {
-        hasParam = true;
-        param *= 10;
-        param += char - Ascii.num0;
+        _csiHasParam = true;
+        _csiParam *= 10;
+        _csiParam += char - Ascii.num0;
         continue;
       }
 
@@ -263,8 +401,8 @@ class EscapeParser {
       }
 
       if (char >= Ascii.atSign && char <= Ascii.tilde) {
-        if (hasParam) {
-          _csi.params.add(param);
+        if (_csiHasParam) {
+          _csi.params.add(_csiParam);
         }
 
         _csi.finalByte = char;
@@ -1081,16 +1219,19 @@ class EscapeParser {
     }
   }
 
-  /// Parse a OSC sequence from the queue. Returns true if a sequence was
-  /// found and handled.
-  bool _escHandleOSC() {
-    final consumed = _consumeOsc();
-    if (!consumed) {
-      return false;
-    }
+  void _escHandleOSC() {
+    // Reset the accumulated OSC state and keep parsing in the osc state,
+    // possibly across chunk boundaries.
+    _osc.clear();
+    _oscParam.clear();
+    _oscSawEsc = false;
+    _state = _ParserState.osc;
+  }
 
+  /// Handles the completed [_osc] parameter list.
+  void _dispatchOsc() {
     if (_osc.isEmpty) {
-      return true;
+      return;
     }
 
     // Common OSCs
@@ -1102,29 +1243,55 @@ class EscapeParser {
         case '0':
           handler.setTitle(pt);
           handler.setIconName(pt);
-          return true;
+          return;
         case '1':
           handler.setIconName(pt);
-          return true;
+          return;
         case '2':
           handler.setTitle(pt);
-          return true;
+          return;
       }
     }
 
     // Private extensions
     handler.unknownOSC(_osc[0], _osc.sublist(1));
-
-    return true;
   }
 
   final _osc = <String>[];
 
-  bool _consumeOsc() {
-    _osc.clear();
-    final param = StringBuffer();
+  /// The OSC parameter currently being accumulated.
+  final _oscParam = StringBuffer();
 
+  /// Whether the last consumed character was an ESC, which may turn out to be
+  /// the ST terminator if a backslash follows.
+  var _oscSawEsc = false;
+
+  /// Consumes more of the OSC at the head of the queue, continuing where the
+  /// previous chunk left off. Returns false if the OSC isn't terminated yet;
+  /// in that case the partially parsed state is kept so the completed prefix
+  /// is never re-parsed.
+  bool _consumeOsc() {
     while (true) {
+      if (_oscSawEsc) {
+        if (_queue.isEmpty) {
+          return false;
+        }
+        _oscSawEsc = false;
+
+        /// OSC terminates with ST
+        if (_queue.consume() == Ascii.backslash) {
+          _flushOscParam();
+          return true;
+        }
+
+        // ESC followed by anything else still terminates the OSC. Emit the
+        // pending parameter and push the character back so it is
+        // re-processed as regular input.
+        _flushOscParam();
+        _queue.rollback();
+        return true;
+      }
+
       if (_queue.isEmpty) {
         return false;
       }
@@ -1133,39 +1300,53 @@ class EscapeParser {
 
       // OSC terminates with BEL
       if (char == Ascii.BEL) {
-        _osc.add(param.toString());
+        _flushOscParam();
         return true;
       }
 
-      /// OSC terminates with ST
       if (char == Ascii.ESC) {
-        if (_queue.isEmpty) {
-          return false;
-        }
-
-        if (_queue.consume() == Ascii.backslash) {
-          _osc.add(param.toString());
-        } else {
-          // ESC followed by anything else still terminates the OSC. Emit the
-          // pending parameter and push the character back so it is
-          // re-processed as regular input.
-          _osc.add(param.toString());
-          _queue.rollback();
-        }
-
-        return true;
+        _oscSawEsc = true;
+        continue;
       }
 
       /// Parse next parameter
       if (char == Ascii.semicolon) {
-        _osc.add(param.toString());
-        param.clear();
+        _flushOscParam();
         continue;
       }
 
-      param.writeCharCode(char);
+      _oscParam.writeCharCode(char);
     }
   }
+
+  void _flushOscParam() {
+    _osc.add(_oscParam.toString());
+    _oscParam.clear();
+  }
+}
+
+/// Parser states that persist across [EscapeParser.write] calls, so an
+/// escape sequence split across chunks is parsed incrementally instead of
+/// being rolled back and re-parsed.
+enum _ParserState {
+  /// Regular input; the next character is either written or starts a
+  /// sequence.
+  ground,
+
+  /// An ESC was consumed; the next character designates the sequence type.
+  esc,
+
+  /// Inside a CSI sequence; [EscapeParser._csi] holds the parsed prefix.
+  csi,
+
+  /// Inside an OSC sequence; [EscapeParser._osc] holds the parsed params.
+  osc,
+
+  /// `ESC (` was consumed; the next character designates the G0 charset.
+  charset0,
+
+  /// `ESC )` was consumed; the next character designates the G1 charset.
+  charset1,
 }
 
 class _Csi {
@@ -1189,8 +1370,9 @@ class _Csi {
 }
 
 /// Function that handles a sequence of characters that starts with an escape.
-/// Returns [true] if the sequence was processed, [false] if it was not.
-typedef _EscHandler = bool Function();
+/// The handler either completes the sequence via `EscapeParser._finishSequence`
+/// or switches the parser into a state that continues with the next chunk.
+typedef _EscHandler = void Function();
 
 typedef _SbcHandler = void Function();
 

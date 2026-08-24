@@ -219,3 +219,17 @@ abstract class EscapeHandler {
 
   void unknownOSC(String code, List<String> args);
 }
+
+/// Optional capability interface for [EscapeHandler]s that accept runs of
+/// literal text in a single call.
+///
+/// Handlers implementing this are delivered consecutive printable code points
+/// as (list, start, end) views instead of one [EscapeHandler.writeChar] call
+/// per character, eliminating the parser's per-character dispatch overhead on
+/// text-heavy input. Handlers that don't implement it (debuggers, test
+/// doubles) keep the exact per-character behavior.
+abstract class TextRunHandler {
+  /// Writes the code points in `chars[start..end)` as literal text. The view
+  /// is only valid for the duration of the call — do not retain it.
+  void writeChars(List<int> chars, int start, int end);
+}
