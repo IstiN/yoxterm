@@ -198,7 +198,12 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   var _stickToBottom = true;
 
   void _onScroll() {
-    _stickToBottom = _scrollOffset >= _maxScrollExtent;
+    // Half-line tolerance: landing a hair short of the live max (fractional
+    // cell metrics, or a programmatic jump clamped to the framework-cached
+    // extent while the buffer already grew) still counts as "at the bottom",
+    // so follow mode re-engages instead of silently dropping out.
+    _stickToBottom =
+        _scrollOffset >= _maxScrollExtent - _painter.cellSize.height / 2;
     markNeedsLayout();
     _notifyEditableRect();
   }
@@ -518,6 +523,15 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   double get _maxScrollExtent {
     return max(_terminalHeight - _viewportHeight, 0.0);
   }
+
+  /// The live maximum scroll extent, computed from the current buffer height.
+  ///
+  /// The framework-cached `ScrollPosition.maxScrollExtent` lags behind this
+  /// value by at least a frame while output streams in, because terminal
+  /// changes only mark layout dirty (applied on the next frame). Programmatic
+  /// "scroll to bottom" jumps should target this value so they land at the
+  /// real bottom and keep stick-to-bottom follow engaged.
+  double get maxScrollExtentLive => hasSize ? _maxScrollExtent : 0.0;
 
   double get _lineOffset {
     return -_scrollOffset + _padding.top;

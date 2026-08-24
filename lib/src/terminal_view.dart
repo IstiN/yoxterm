@@ -470,9 +470,12 @@ class TerminalViewState extends State<TerminalView> {
 
   void _scrollToBottom() {
     final position = _scrollableKey.currentState?.position;
-    if (position != null) {
-      position.jumpTo(position.maxScrollExtent);
-    }
+    if (position == null) return;
+    // Target the live extent, not the framework-cached maxScrollExtent: the
+    // render object applies content dimensions one frame after the buffer
+    // grows, so the cached max trails live output and jumping to it would
+    // land short of the real bottom, breaking stick-to-bottom follow.
+    position.jumpTo(renderTerminal.maxScrollExtentLive);
   }
 }
 
