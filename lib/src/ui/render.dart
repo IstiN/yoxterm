@@ -70,7 +70,35 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// [markNeedsPaint] is always called synchronously there).
   static const _minOutputPaintInterval = Duration(milliseconds: 16);
   DateTime _lastOutputPaint = DateTime.fromMillisecondsSinceEpoch(0);
-  bool _outputPaintScheduled = false;
+
+  /// Set when a paint is scheduled for the current frame via
+  /// [_scheduleOutputPaint]. Cleared at the very end of the
+  /// [paint] pass — a different lifecycle than the previous
+  /// `_outputPaintScheduled`, which was cleared inside the frame callback.
+  /// Holding the flag past the transientCallbacks/layout/paint phases
+  /// guarantees the writes that land in any of those synchronous phases
+  /// still see "scheduled" and noop instead of re-arming another
+  /// frame callback.
+  bool _paintScheduled = false;
+
+  /// Cumulative number of [paint] calls since the last
+  /// [debugResetPaintCounter]. Exposed so throttle coalescing tests can
+  /// observe actual paint cost without wiring a custom paint callback.
+  @visibleForTesting
+  int debugPaintCount = 0;
+
+  /// Resets [debugPaintCount] to 0. Tests call this after the initial pump
+  /// so the counter only reflects paints produced by the scenario under
+  /// test, not the attach/layout pass.
+  @visibleForTesting
+  void debugResetPaintCounter() {
+    debugPaintCount = 0;
+  }
+
+  /// Read-only view of the output-paint throttle interval. Exposed so
+  /// tests can observe the period without tying to the private field.
+  @visibleForTesting
+  Duration get debugMinOutputPaintInterval => _minOutputPaintInterval;
 
   /// Number of scrollback lines above which main-buffer resizes are debounced.
   static const _largeScrollbackThreshold = 100;
@@ -215,10 +243,14 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   void _scheduleLayout() {
     if (_layoutPending) return;
     _layoutPending = true;
-    SchedulerBinding.instance.addPostFrameCallback((_) {
-      _layoutPending = false;
-      if (attached) markNeedsLayout();
-    });
+    // Layout piggybacks on the same frame callback that fires
+    // [_scheduleOutputPaint] (see [_runPendingLayoutAndPaint]). The previous
+    // implementation scheduled a postFrame callback that called markNeedsLayout
+    // on the NEXT frame, and that layout pass produced a second paint per
+    // write burst via the repaint-boundary cascade. Combining layout and paint
+    // into a single transientCallbacks phase keeps them in lockstep: the layout
+    // pass runs in the same frame as the paint that needs the new geometry, so
+    // no cascade paint is produced.
   }
 
   void _onTerminalChange() {
@@ -230,20 +262,35 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// Rate-limits output-driven repaints (see [_minOutputPaintInterval]).
   /// Scroll, selection and other user-driven repaints bypass this throttle.
   void _scheduleOutputPaint() {
-    if (_outputPaintScheduled) return;
+    if (_paintScheduled) return;
+    _paintScheduled = true;
     final elapsed = DateTime.now().difference(_lastOutputPaint);
     if (elapsed >= _minOutputPaintInterval) {
-      markNeedsPaint();
+      _runPendingLayoutAndPaint();
       return;
     }
     // A frame callback (not a Timer) keeps widget tests free of pending-timer
     // failures and piggybacks on the next scheduled frame instead of forcing
     // an extra one.
-    _outputPaintScheduled = true;
     SchedulerBinding.instance.scheduleFrameCallback((_) {
-      _outputPaintScheduled = false;
-      if (attached) markNeedsPaint();
+      _runPendingLayoutAndPaint();
     });
+  }
+
+  /// Mark both layout and paint dirty in a single transient-callback phase.
+  /// The previous split (`_scheduleLayout`'s postFrame to `markNeedsLayout`,
+  /// then a layout pass on the following frame) leaked an extra paint per
+  /// write burst — see the cascade detection in
+  /// `test/src/ui/render_paint_throttle_test.dart`. Bundling layout and paint
+  /// into the same frame callback keeps them in lockstep: one paint per
+  /// throttle cycle.
+  void _runPendingLayoutAndPaint() {
+    _paintScheduled = false;
+    if (!attached) return;
+    final hadPendingLayout = _layoutPending;
+    _layoutPending = false;
+    if (hadPendingLayout) markNeedsLayout();
+    markNeedsPaint();
   }
 
   void _onControllerUpdate() {
@@ -558,6 +605,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   @override
   void paint(PaintingContext context, Offset offset) {
     _lastOutputPaint = DateTime.now();
+    debugPaintCount++;
     _paint(context, offset);
     // Hint that this picture is expensive to rasterize so the engine keeps it
     // in the raster cache while it is unchanged (board pan/zoom, overlays,
@@ -567,6 +615,12 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     // _onTerminalChange, which produces a new picture that simply evicts the
     // stale cache entry.
     context.setIsComplexHint();
+    // Mark the throttle as fully consumed: any synchronous terminal change
+    // that landed after [_runPendingLayoutAndPaint] ran during
+    // transientCallbacks now sees the flag false and can arm a new frame
+    // callback. Resetting here (instead of inside the frame callback) keeps
+    // the burst from re-arming mid-paint.
+    _paintScheduled = false;
   }
 
   void _paint(PaintingContext context, Offset offset) {
