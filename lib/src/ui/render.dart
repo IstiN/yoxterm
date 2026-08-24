@@ -440,8 +440,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     // Alt-buffer (full-screen TUI): debounce 200ms to avoid corrupting the TUI
     // layout during a panel drag.
     //
-    // Main buffer with large scrollback: debounce 150ms to avoid triggering
-    // an expensive O(maxLines) reflow on every layout frame during drag.
+    // Main buffer with large scrollback: a short 60ms debounce keeps
+    // continuous drag frames from triggering an O(maxLines) reflow each
+    // layout, while making one-shot window/board-switch resizes settle
+    // within a frame or two instead of leaving the panel visibly black
+    // below the new viewport for 150ms+.
     // Sessions with <= _largeScrollbackThreshold lines of scrollback are
     // resized immediately (cheap: no reflow work).
     final scrollBack = _terminal.lines.length - _terminal.viewHeight;
@@ -453,7 +456,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       _altResizeDebounce?.cancel();
       final delay = _terminal.isUsingAltBuffer
           ? const Duration(milliseconds: 200)
-          : const Duration(milliseconds: 150);
+          : const Duration(milliseconds: 60);
       _altResizeDebounce = Timer(delay, () {
         final pending = _pendingViewportSize;
         _pendingViewportSize = null;
