@@ -1,3 +1,10 @@
+## [4.0.2] - 2026-08-24
+* Add `RenderTerminal.forceResizeTerminal()`: cancels the resize debounce and
+  immediately re-pushes the current viewport size to the terminal. Needed when
+  a widget binding is restored after another widget (e.g. a fullscreen view)
+  resized the shared `Terminal` — without it the restored widget keeps
+  rendering at the stale grid (blank viewport) until the next manual resize.
+
 ## [4.0.1] - 2026-08-23
 * Rewritten README: yoxterm badges (pub, CI, CRAP) and a benchmark table with
   measured numbers (98.3 MB/s plain-text parse, ~35x fewer canvas ops per

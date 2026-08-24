@@ -1,6 +1,6 @@
 name: yoxterm
 description: High-performance terminal emulator for Flutter — a performance-focused fork of xterm.dart with glyph-atlas rendering, pooled paint ops and parser fast paths. Mobile and desktop supported.
-version: 4.0.1
+version: 4.0.2
 repository: https://github.com/IstiN/yoxterm
 issue_tracker: https://github.com/IstiN/yoxterm/issues
 topics:
