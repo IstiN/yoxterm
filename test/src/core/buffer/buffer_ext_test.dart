@@ -974,4 +974,87 @@ void main() {
       expect(text, contains('1: ||'));
     });
   });
+
+  // Regression tests for the cached `currentLine`: the cache must never go
+  // stale, so writes always land on the line the cursor actually sits on.
+  group('Buffer.currentLine', () {
+    test('writes land on the correct line across cursor moves', () {
+      final terminal = createTerminal();
+      terminal.write('aaa\r\nbbb\r\nccc');
+
+      terminal.buffer.setCursor(0, 0);
+      terminal.write('X');
+
+      terminal.buffer.setCursor(0, 2);
+      terminal.write('Z');
+
+      expect(terminal.buffer.lines[0].getText(0, 10), 'Xaa');
+      expect(terminal.buffer.lines[1].getText(0, 10), 'bbb');
+      expect(terminal.buffer.lines[2].getText(0, 10), 'Zcc');
+    });
+
+    test('writes land on the correct line across scrolls', () {
+      final terminal = createTerminal(width: 10, height: 3, maxLines: 30);
+      terminal.write('L0\r\nL1\r\nL2\r\nL3');
+
+      final buffer = terminal.buffer;
+      expect(buffer.scrollBack, 1);
+      expect(buffer.lines[2].getText(0, 2), 'L2');
+      expect(buffer.lines[3].getText(0, 2), 'L3');
+    });
+
+    test('writes land on the correct line when the ring recycles lines', () {
+      // Terminal floors maxLines at 24; with 25 the ring recycles the oldest
+      // line once 25 lines are filled.
+      final terminal = createTerminal(width: 10, height: 3, maxLines: 25);
+      for (var i = 0; i < 30; i++) {
+        terminal.write('n$i\r\n');
+      }
+
+      final buffer = terminal.buffer;
+      expect(buffer.height, 25);
+      expect(buffer.lines[23].getText(0, 10), 'n29');
+      // The current line was recycled from the scrolled-out 'n5' line.
+      // Writing to it must not resurrect that stale content.
+      terminal.write('X');
+      expect(buffer.lines[24].getText(0, 10), 'X');
+    });
+
+    test('restoreCursor retargets subsequent writes', () {
+      final terminal = createTerminal();
+      terminal.write('aaa');
+      terminal.write('\x1b7'); // DECSC: save cursor
+      terminal.write('\r\n');
+      terminal.write('bbb');
+      terminal.write('\x1b8'); // DECRC: restore cursor
+      terminal.write('X');
+
+      expect(terminal.buffer.lines[0].getText(0, 4), 'aaaX');
+      expect(terminal.buffer.lines[1].getText(0, 3), 'bbb');
+    });
+
+    test('resize keeps writes on the cursor line', () {
+      final terminal = createTerminal(width: 10, height: 5);
+      terminal.write('aaa\r\nbbb\r\nccc');
+
+      terminal.resize(10, 3);
+      terminal.write('X');
+
+      expect(terminal.buffer.height, 3);
+      expect(terminal.buffer.lines[2].getText(0, 4), 'cccX');
+    });
+
+    test('clear retargets subsequent writes', () {
+      final terminal = createTerminal(width: 10, height: 3);
+      terminal.write('aaa\r\nbbb');
+
+      // clear() replaces every line; the cursor stays on row 1, column 3.
+      terminal.buffer.clear();
+      terminal.write('Z');
+
+      expect(terminal.buffer.lines[0].getText(0, 10), '');
+      expect(terminal.buffer.lines[1].getCodePoint(3), 'Z'.codeUnitAt(0));
+      expect(terminal.buffer.lines[1].getTrimmedLength(), 4);
+    });
+  });
 }

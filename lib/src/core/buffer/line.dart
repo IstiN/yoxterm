@@ -27,6 +27,16 @@ class BufferLine with IndexedItem {
 
   Uint32List _data;
 
+  /// High-water mark (in cells) of the highest index ever written since the
+  /// last [reset]. Invariant: cells at index >= [_occ] are always zero, so
+  /// [reset] only needs to clear `[0, _occ)` instead of the whole backing
+  /// store (which is allocated with spare capacity, e.g. 128 cells for an
+  /// 80-column line).
+  var _occ = 0;
+
+  /// The current high-water mark of written cells. Exposed for tests.
+  int get debugOccupiedCells => _occ;
+
   Uint32List get data => _data;
 
   var isWrapped = false;
@@ -88,21 +98,25 @@ class BufferLine with IndexedItem {
 
   void setForeground(int index, int value) {
     _data[index * _cellSize + _cellForeground] = value;
+    _touch(index);
     version++;
   }
 
   void setBackground(int index, int value) {
     _data[index * _cellSize + _cellBackground] = value;
+    _touch(index);
     version++;
   }
 
   void setAttributes(int index, int value) {
     _data[index * _cellSize + _cellAttributes] = value;
+    _touch(index);
     version++;
   }
 
   void setContent(int index, int value) {
     _data[index * _cellSize + _cellContent] = value;
+    _touch(index);
     version++;
   }
 
@@ -117,6 +131,7 @@ class BufferLine with IndexedItem {
     _data[offset + _cellBackground] = style.background;
     _data[offset + _cellAttributes] = style.attrs;
     _data[offset + _cellContent] = char | (witdh << CellContent.widthShift);
+    _touch(index);
     version++;
   }
 
@@ -126,16 +141,29 @@ class BufferLine with IndexedItem {
     _data[offset + _cellBackground] = cellData.background;
     _data[offset + _cellAttributes] = cellData.flags;
     _data[offset + _cellContent] = cellData.content;
+    _touch(index);
     version++;
   }
 
+  /// Raises the high-water mark so [reset] clears cell [index] too.
+  void _touch(int index) {
+    if (index >= _occ) _occ = index + 1;
+  }
+
   void eraseCell(int index, CursorStyle style) {
+    _eraseCellRaw(index, style);
+    version++;
+  }
+
+  /// Erases a cell without bumping [version]. Bulk operations erase their
+  /// cells through this and bump [version] once for the whole operation.
+  void _eraseCellRaw(int index, CursorStyle style) {
     final offset = index * _cellSize;
     _data[offset + _cellForeground] = style.foreground;
     _data[offset + _cellBackground] = style.background;
     _data[offset + _cellAttributes] = style.attrs;
     _data[offset + _cellContent] = 0;
-    version++;
+    _touch(index);
   }
 
   void resetCell(int index) {
@@ -144,6 +172,7 @@ class BufferLine with IndexedItem {
     _data[offset + _cellBackground] = 0;
     _data[offset + _cellAttributes] = 0;
     _data[offset + _cellContent] = 0;
+    _touch(index);
     version++;
   }
 
@@ -152,18 +181,19 @@ class BufferLine with IndexedItem {
   void eraseRange(int start, int end, CursorStyle style) {
     // reset cell one to the left if start is second cell of a wide char
     if (start > 0 && getWidth(start - 1) == 2) {
-      eraseCell(start - 1, style);
+      _eraseCellRaw(start - 1, style);
     }
 
     // reset cell one to the right if end is second cell of a wide char
     if (end > 0 && end < _length && getWidth(end - 1) == 2) {
-      eraseCell(end - 1, style);
+      _eraseCellRaw(end - 1, style);
     }
 
     end = min(end, _length);
     for (var i = start; i < end; i++) {
-      eraseCell(i, style);
+      _eraseCellRaw(i, style);
     }
+    version++;
   }
 
   /// Remove [count] cells starting at [start]. Cells that are empty after the
@@ -182,11 +212,11 @@ class BufferLine with IndexedItem {
     }
 
     for (var i = _length - count; i < _length; i++) {
-      eraseCell(i, style);
+      _eraseCellRaw(i, style);
     }
 
     if (start > 0 && getWidth(start - 1) == 2) {
-      eraseCell(start - 1, style);
+      _eraseCellRaw(start - 1, style);
     }
 
     // Update anchors, remove anchors that are inside the removed range.
@@ -209,7 +239,7 @@ class BufferLine with IndexedItem {
     style ??= CursorStyle.empty;
 
     if (start > 0 && getWidth(start - 1) == 2) {
-      eraseCell(start - 1, style);
+      _eraseCellRaw(start - 1, style);
     }
 
     if (start + count < _length) {
@@ -217,15 +247,17 @@ class BufferLine with IndexedItem {
       final moveEnd = (_length - count) * _cellSize;
       final moveOffset = count * _cellSize;
       _data.setRange(moveStart + moveOffset, moveEnd + moveOffset, _data, moveStart);
+      // Content shifted right: the high-water mark moves with it.
+      if (_occ > start) _occ = min(_occ + count, _length);
     }
 
     final end = min(start + count, _length);
     for (var i = start; i < end; i++) {
-      eraseCell(i, style);
+      _eraseCellRaw(i, style);
     }
 
     if (getWidth(_length - 1) == 2) {
-      eraseCell(_length - 1, style);
+      _eraseCellRaw(_length - 1, style);
     }
 
     // Update anchors, move anchors that are after the inserted range.
@@ -311,6 +343,7 @@ class BufferLine with IndexedItem {
       src.data,
       srcCol * _cellSize,
     );
+    if (dstCol + len > _occ) _occ = dstCol + len;
     version++;
   }
 
@@ -363,8 +396,16 @@ class BufferLine with IndexedItem {
   /// Erases all cells and resets per-line state ([isWrapped], anchors) so the
   /// line can be reused as a fresh empty line. Used to recycle scrolled-out
   /// lines instead of allocating a new [BufferLine] per scrolled line.
+  ///
+  /// Only cells below the [_occ] high-water mark are cleared: cells at or
+  /// beyond it were never written since the last reset and are known to be
+  /// zero already, so a short line does not pay for clearing the whole
+  /// (capacity-sized) backing store.
   void reset() {
-    _data.fillRange(0, _data.length, 0);
+    if (_occ > 0) {
+      _data.fillRange(0, _occ * _cellSize, 0);
+      _occ = 0;
+    }
     isWrapped = false;
     version++;
     // Detach anchors that still point at this line (e.g. selection ends) so

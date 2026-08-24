@@ -5,6 +5,7 @@ import 'package:flutter/painting.dart';
 import 'package:yoxterm/src/ui/glyph_atlas.dart';
 import 'package:yoxterm/src/ui/palette_builder.dart';
 import 'package:yoxterm/src/ui/paragraph_cache.dart';
+import 'package:yoxterm/src/utils/circular_buffer.dart';
 import 'package:yoxterm/xterm.dart';
 
 /// Encapsulates the logic for painting various terminal elements.
@@ -210,6 +211,12 @@ class TerminalPainter {
   @visibleForTesting
   int debugLineBuildCount = 0;
 
+  /// Number of times the current glyph atlas re-rasterized its image. Tests
+  /// use it to assert frame-wide glyph discovery ([prepareLineGlyphs])
+  /// batches into a single rebuild.
+  @visibleForTesting
+  int get debugAtlasRebuildCount => _glyphAtlas?.debugRebuildCount ?? 0;
+
   /// Paint used for atlas sprite batches. Bilinear sampling is exact for the
   /// dpr-snapped 1:1 texel mapping and smoother for fractional positions.
   final _atlasPaint = Paint()..filterQuality = FilterQuality.low;
@@ -323,8 +330,24 @@ class TerminalPainter {
 
   /// Pre-rasterizes every mergeable glyph variant of [line] that the atlas
   /// does not have yet, batching the additions into a single atlas rebuild.
+  ///
+  /// This is the per-line fallback for [paintLine] calls that were not
+  /// preceded by [prepareLineGlyphs]; the render loop uses that frame-wide
+  /// pass instead, so a burst of new styled glyphs costs one rebuild per
+  /// frame rather than one per line that discovers a missing variant.
   void _ensureLineGlyphs(GlyphAtlas atlas, BufferLine line) {
     final missing = _atlasMissingKeys..clear();
+    _collectMissingGlyphs(atlas, line, missing);
+    if (missing.isNotEmpty) atlas.ensureAll(missing);
+  }
+
+  /// Appends the keys of every mergeable glyph variant of [line] that
+  /// [atlas] does not have yet to [missing], without rebuilding the atlas.
+  void _collectMissingGlyphs(
+    GlyphAtlas atlas,
+    BufferLine line,
+    List<int> missing,
+  ) {
     final cellData = _reusableCellData;
     for (var i = 0; i < line.length; i++) {
       line.getCellData(i, cellData);
@@ -337,6 +360,30 @@ class TerminalPainter {
         }
       }
       if (charWidth == 2) i++;
+    }
+  }
+
+  /// Phase 1 of the two-phase paint pass: walks the visible [lines] in
+  /// `[firstLine, lastLine]`, collects every mergeable glyph variant the
+  /// atlas is missing, and rebuilds the atlas at most once. Called by the
+  /// render loop before the per-line [paintLine] calls (phase 2), so the
+  /// first frame of styled output (a bold/italic/underline ASCII mix) pays
+  /// for a single atlas re-rasterization instead of one per line.
+  ///
+  /// Does nothing when the atlas cannot serve [canvas] (see
+  /// [_atlasUsableOn]); [paintLine] then uses the paragraph path as usual.
+  void prepareLineGlyphs(
+    Canvas canvas,
+    IndexAwareCircularBuffer<BufferLine> lines,
+    int firstLine,
+    int lastLine,
+  ) {
+    if (!_atlasUsableOn(canvas)) return;
+    final atlas = _atlas();
+    if (atlas.isFull) return;
+    final missing = _atlasMissingKeys..clear();
+    for (var i = firstLine; i <= lastLine; i++) {
+      _collectMissingGlyphs(atlas, lines[i], missing);
     }
     if (missing.isNotEmpty) atlas.ensureAll(missing);
   }

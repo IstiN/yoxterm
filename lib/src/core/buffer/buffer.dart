@@ -150,8 +150,23 @@ class Buffer {
   }
 
   /// The line at the current cursor position.
+  ///
+  /// The resolved line is cached: [writeChar] resolves it once per character
+  /// otherwise (range check + modulo through the circular buffer). The cache
+  /// is invalidated on every cursor-Y change and every operation that moves,
+  /// replaces or rotates lines, and lazily re-resolved here.
   BufferLine get currentLine {
-    return lines[absoluteCursorY];
+    return _currentLineCache ??= lines[absoluteCursorY];
+  }
+
+  BufferLine? _currentLineCache;
+
+  /// Drops the cached [currentLine]. Must be called whenever the cursor row
+  /// changes or [lines] is structurally mutated (push/pop/insert/move/swap/
+  /// clear/trimStart/replaceWith), since both change what
+  /// `lines[absoluteCursorY]` refers to.
+  void _invalidateCurrentLine() {
+    _currentLineCache = null;
   }
 
   void backspace() {
@@ -225,6 +240,7 @@ class Buffer {
   }
 
   void scrollDown(int lines) {
+    _invalidateCurrentLine();
     for (var i = absoluteMarginBottom; i >= absoluteMarginTop; i--) {
       if (i >= absoluteMarginTop + lines) {
         this.lines.move(i - lines, i);
@@ -235,6 +251,7 @@ class Buffer {
   }
 
   void scrollUp(int lines) {
+    _invalidateCurrentLine();
     for (var i = absoluteMarginTop; i <= absoluteMarginBottom; i++) {
       if (i <= absoluteMarginBottom - lines) {
         this.lines.move(i + lines, i);
@@ -260,6 +277,7 @@ class Buffer {
           // under output floods this allocation (BufferLine + its cell data
           // array) was the dominant source of GC pressure.
           final line = lines.isFull ? (lines[0]..reset()) : _newEmptyLine();
+          _invalidateCurrentLine();
           lines.insert(absoluteMarginBottom + 1, line);
         } else {
           scrollUp(1);
@@ -278,6 +296,7 @@ class Buffer {
       } else {
         // See above: recycle the scrolled-out line when the buffer is full.
         final line = lines.isFull ? (lines[0]..reset()) : _newEmptyLine();
+        _invalidateCurrentLine();
         lines.push(line);
       }
     } else {
@@ -316,6 +335,7 @@ class Buffer {
 
   void setCursorY(int cursorY) {
     _cursorY = cursorY.clamp(0, viewHeight - 1);
+    _invalidateCurrentLine();
   }
 
   void moveCursorX(int offset) {
@@ -336,6 +356,7 @@ class Buffer {
 
     _cursorX = cursorX.clamp(0, viewWidth - 1);
     _cursorY = cursorY.clamp(0, maxCursorY);
+    _invalidateCurrentLine();
   }
 
   void moveCursor(int offsetX, int offsetY) {
@@ -358,6 +379,7 @@ class Buffer {
   void restoreCursor() {
     _cursorX = _savedCursorX;
     _cursorY = _savedCursorY;
+    _invalidateCurrentLine();
     terminal.cursor.foreground = _savedCursorStyle.foreground;
     terminal.cursor.background = _savedCursorStyle.background;
     terminal.cursor.attrs = _savedCursorStyle.attrs;
@@ -394,11 +416,13 @@ class Buffer {
       return;
     }
 
+    _invalidateCurrentLine();
     lines.trimStart(scrollBack);
   }
 
   /// Clears the viewport and scrollback buffer. Then fill with empty lines.
   void clear() {
+    _invalidateCurrentLine();
     lines.clear();
     for (int i = 0; i < viewHeight; i++) {
       lines.push(_newEmptyLine());
@@ -415,6 +439,7 @@ class Buffer {
     }
 
     setCursorX(0);
+    _invalidateCurrentLine();
 
     // Number of lines from the cursor to the bottom of the scrollable region
     // including the cursor itself.
@@ -445,6 +470,7 @@ class Buffer {
     }
 
     setCursorX(0);
+    _invalidateCurrentLine();
 
     count = min(count, absoluteMarginBottom - absoluteCursorY + 1);
 
@@ -500,6 +526,9 @@ class Buffer {
         lines.forEach((item) => item.resize(newWidth));
       }
     }
+
+    // The cursor row and/or the line ordering changed above.
+    _invalidateCurrentLine();
   }
 
   /// Create a new [CellAnchor] at the specified [x] and [y] coordinates.

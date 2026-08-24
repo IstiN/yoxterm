@@ -76,4 +76,40 @@ void main() {
     expect(canvas.atlasBatches[0], 'atlas@(0.0,0.0) sprites=2');
     expect(canvas.atlasBatches[1], 'atlas@(${cw * 3},0.0) sprites=2');
   });
+
+  test('frame-wide glyph discovery rebuilds the atlas once', () {
+    final terminal = Terminal();
+    // Three lines, each introducing new glyph variants (bold, italic,
+    // underline ASCII). Discovering them lazily per line would rebuild the
+    // cold atlas once per line; the frame-wide pass must batch them.
+    terminal.write('\x1b[1mAB');
+    terminal.write('\r\n');
+    terminal.write('\x1b[0;3mCD');
+    terminal.write('\r\n');
+    terminal.write('\x1b[0;4mEF');
+
+    final painter = TerminalPainter(
+      theme: TerminalThemes.defaultTheme,
+      textStyle: const TerminalStyle(fontSize: 8),
+      textScaler: TextScaler.noScaling,
+    );
+    painter.debugDevicePixelRatio = 1.0;
+    final canvas = _RecordingCanvas();
+    final lines = terminal.buffer.lines;
+
+    // Phase 1: one discovery pass over all visible lines.
+    painter.prepareLineGlyphs(canvas, lines, 0, 2);
+    expect(painter.debugAtlasRebuildCount, 1);
+
+    // Phase 2: painting finds every tile already present — no rebuilds.
+    for (var i = 0; i <= 2; i++) {
+      painter.paintLine(canvas, Offset(0, i * painter.cellSize.height), lines[i]);
+    }
+    expect(painter.debugAtlasRebuildCount, 1);
+
+    // All six styled cells were served by the atlas as sprite batches.
+    expect(canvas.paragraphs, isEmpty);
+    expect(canvas.atlasBatches, hasLength(3));
+    expect(canvas.atlasBatches[0], 'atlas@(0.0,0.0) sprites=2');
+  });
 }

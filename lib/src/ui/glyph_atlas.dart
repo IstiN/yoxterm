@@ -85,6 +85,10 @@ class GlyphAtlas {
   ui.Image? _image;
   var _tileCount = 0;
 
+  /// Number of times the atlas image has been re-rasterized. Tests use it to
+  /// assert that frame-wide glyph discovery batches into a single rebuild.
+  var debugRebuildCount = 0;
+
   /// The current atlas image, or null when no glyph has been rasterized yet.
   ui.Image? get image => _image;
 
@@ -178,6 +182,7 @@ class GlyphAtlas {
     picture.dispose();
     _image?.dispose();
     _image = newImage;
+    debugRebuildCount++;
   }
 
   ui.Paragraph _layoutGlyph(int key) {

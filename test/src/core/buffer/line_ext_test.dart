@@ -616,6 +616,114 @@ void main() {
       expect(line.anchors, isEmpty);
       expect(anchor.line, isNull);
     });
+
+    test('clears a partially occupied line and resets the high-water mark',
+        () {
+      // Capacity rounds up to 128 cells; only 3 are written.
+      final line = asciiLine('ABC', 80);
+      expect(line.debugOccupiedCells, 3);
+
+      line.reset();
+
+      expect(line.debugOccupiedCells, 0);
+      expect(line.getText(), '');
+      expect(line.getTrimmedLength(), 0);
+      // Every word of the backing store is clear after the reset.
+      for (final word in line.data) {
+        expect(word, 0);
+      }
+    });
+
+    test('clears cells written anywhere in the line', () {
+      final line = BufferLine(80);
+      line.setCodePoint(70, 'X'.codeUnitAt(0));
+      expect(line.debugOccupiedCells, 71);
+
+      line.reset();
+
+      expect(line.debugOccupiedCells, 0);
+      expect(line.getCodePoint(70), 0);
+      for (final word in line.data) {
+        expect(word, 0);
+      }
+    });
+
+    test('a recycled line shows no stale content from its previous life', () {
+      final line = asciiLine('ABCDEF', 80);
+      line.reset();
+
+      writeAscii(line, 'xy');
+
+      expect(line.getText(0, 80), 'xy');
+      expect(line.getTrimmedLength(), 2);
+    });
+  });
+
+  group('BufferLine version bumps', () {
+    test('eraseRange bumps the version exactly once', () {
+      final line = asciiLine('ABCDEF');
+      final before = line.version;
+
+      line.eraseRange(1, 4, CursorStyle.empty);
+
+      expect(line.version, before + 1);
+    });
+
+    test('eraseRange with wide-char fixups bumps the version exactly once',
+        () {
+      final line = BufferLine(10);
+      line.setCodePoint(0, 'A'.codeUnitAt(0));
+      line.setCodePoint(1, 0x4E16); // 世 occupies cells 1-2
+      line.setCodePoint(3, 'B'.codeUnitAt(0));
+      final before = line.version;
+
+      // Erases cells 1-3 (wide-char fixup plus the range itself).
+      line.eraseRange(2, 4, CursorStyle.empty);
+
+      expect(line.version, before + 1);
+    });
+
+    test('removeCells bumps the version exactly once', () {
+      final line = asciiLine('ABCDEF');
+      final before = line.version;
+
+      line.removeCells(2, 2);
+
+      expect(line.version, before + 1);
+      // Erase correctness is preserved.
+      expect(line.getText(0, 10), 'ABEF');
+    });
+
+    test('insertCells bumps the version exactly once', () {
+      final line = asciiLine('ABCDEF');
+      final before = line.version;
+
+      line.insertCells(2, 2);
+
+      expect(line.version, before + 1);
+      expect(line.getCodePoint(2), 0);
+      expect(line.getCodePoint(3), 0);
+      expect(line.getCodePoint(4), 'C'.codeUnitAt(0));
+    });
+
+    test('eraseCell bumps the version exactly once', () {
+      final line = asciiLine('ABCDEF');
+      final before = line.version;
+
+      line.eraseCell(1, CursorStyle.empty);
+
+      expect(line.version, before + 1);
+      expect(line.getCodePoint(1), 0);
+    });
+
+    test('reset bumps the version exactly once', () {
+      final line = asciiLine('ABCDEF');
+      final before = line.version;
+
+      line.reset();
+
+      expect(line.version, before + 1);
+    });
   });
 
   group('BufferLine.dispose()', () {

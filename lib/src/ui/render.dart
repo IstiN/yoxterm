@@ -576,6 +576,10 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final effectFirstLine = firstLine.clamp(0, lines.length - 1);
     final effectLastLine = lastLine.clamp(0, lines.length - 1);
 
+    // Phase 1: collect missing glyphs across all visible lines and rebuild
+    // the atlas at most once, before any line references the new tiles.
+    _painter.prepareLineGlyphs(canvas, lines, effectFirstLine, effectLastLine);
+
     for (var i = effectFirstLine; i <= effectLastLine; i++) {
       _painter.paintLine(
         canvas,
