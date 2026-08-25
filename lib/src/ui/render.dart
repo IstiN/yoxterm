@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'dart:math' show max;
 import 'dart:ui';
-
 import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/widgets.dart';
@@ -81,6 +80,31 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// frame callback.
   bool _paintScheduled = false;
 
+  /// Two-phase paint (ghostty beginUpdate/endUpdate port): the static text
+  /// layer of the viewport — background fill plus every visible line — is
+  /// recorded into a single [Picture] and replayed with one `drawPicture`
+  /// call, while only the dynamic overlay (cursor, composing text,
+  /// selection, highlights) is re-drawn from Dart on each repaint. A repaint
+  /// that changes nothing below the overlay (cursor blink, selection drag,
+  /// focus change) then costs exactly one native picture dispatch instead of
+  /// a per-line walk.
+  Picture? _framePicture;
+
+  /// Scroll offset the frame picture was recorded at.
+  double _framePictureScroll = 0;
+
+  /// Set when a repaint arrives with a terminal/controller change that can
+  /// alter line content (any terminal notification, theme, or resize). The
+  /// next [paint] re-records the frame picture after replaying the lines
+  /// once to refresh the painter's per-line cache.
+  bool _framePictureDirty = true;
+
+  /// Monotonic counters for tests (see render_frame_picture_test.dart).
+  @visibleForTesting
+  int debugFramePictureRebuilds = 0;
+  @visibleForTesting
+  int debugFramePictureHits = 0;
+
   /// Cumulative number of [paint] calls since the last
   /// [debugResetPaintCounter]. Exposed so throttle coalescing tests can
   /// observe actual paint cost without wiring a custom paint callback.
@@ -113,6 +137,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     if (attached) _terminal.removeListener(_onTerminalChange);
     _terminal = terminal;
     if (attached) _terminal.addListener(_onTerminalChange);
+    _framePictureDirty = true;
     _resizeTerminalIfNeeded();
     markNeedsLayout();
     markNeedsPaint();
@@ -154,18 +179,21 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   set textStyle(TerminalStyle value) {
     if (value == _painter.textStyle) return;
     _painter.textStyle = value;
+    _framePictureDirty = true;
     markNeedsLayout();
   }
 
   set textScaler(TextScaler value) {
     if (value == _painter.textScaler) return;
     _painter.textScaler = value;
+    _framePictureDirty = true;
     markNeedsLayout();
   }
 
   set theme(TerminalTheme value) {
     if (value == _painter.theme) return;
     _painter.theme = value;
+    _framePictureDirty = true;
     markNeedsPaint();
   }
 
@@ -232,6 +260,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     // so follow mode re-engages instead of silently dropping out.
     _stickToBottom =
         _scrollOffset >= _maxScrollExtent - _painter.cellSize.height / 2;
+    _framePictureDirty = true;
     markNeedsLayout();
     _notifyEditableRect();
   }
@@ -254,6 +283,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   }
 
   void _onTerminalChange() {
+    _framePictureDirty = true;
     _scheduleLayout();
     _scheduleOutputPaint();
     _notifyEditableRect();
@@ -315,6 +345,8 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     super.detach();
     _altResizeDebounce?.cancel();
     _altResizeDebounce = null;
+    _framePicture?.dispose();
+    _framePicture = null;
     _offset.removeListener(_onScroll);
     _terminal.removeListener(_onTerminalChange);
     _controller.removeListener(_onControllerUpdate);
@@ -329,6 +361,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   @override
   void systemFontsDidChange() {
     _painter.clearFontCache();
+    _framePictureDirty = true;
     super.systemFontsDidChange();
   }
 
@@ -336,6 +369,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   void performLayout() {
     size = constraints.biggest;
 
+    _framePictureDirty = true;
     _updateViewportSize();
 
     _updateScrollOffset();
@@ -547,6 +581,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       _painter.cellSize.width.round(),
       _painter.cellSize.height.round(),
     );
+    _framePictureDirty = true;
     _updateScrollOffset();
     markNeedsPaint();
   }
@@ -628,12 +663,6 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final paintBounds = offset & size;
     canvas.save();
     canvas.clipRect(paintBounds);
-    // Use isAntiAlias=false for solid background fills so they have sharp
-    // pixel-perfect edges even when the board canvas has a fractional scale.
-    canvas.drawRect(
-      paintBounds,
-      _backgroundPaint..color = _painter.theme.background,
-    );
 
     final lines = _terminal.buffer.lines;
     final charHeight = _painter.cellSize.height;
@@ -647,17 +676,47 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     final effectFirstLine = firstLine.clamp(0, lines.length - 1);
     final effectLastLine = lastLine.clamp(0, lines.length - 1);
 
-    // Phase 1: collect missing glyphs across all visible lines and rebuild
-    // the atlas at most once, before any line references the new tiles.
-    _painter.prepareLineGlyphs(canvas, lines, effectFirstLine, effectLastLine);
-
-    for (var i = effectFirstLine; i <= effectLastLine; i++) {
-      _painter.paintLine(
-        canvas,
-        offset.translate(0, i * charHeight + _lineOffset),
-        lines[i],
+    // Phase 1 (record): when anything that feeds the static layer changed,
+    // re-record background + every visible line into a single Picture. The
+    // per-line painter cache stays warm inside the recording pass, so a
+    // rebuild costs exactly the per-line walk plus the recording itself.
+    final framePicture = _framePicture;
+    if (_framePictureDirty ||
+        framePicture == null ||
+        _framePictureScroll != _scrollOffset) {
+      _framePicture?.dispose();
+      final recorder = PictureRecorder();
+      final recordCanvas = Canvas(recorder);
+      // Use isAntiAlias=false for solid background fills so they have sharp
+      // pixel-perfect edges even when the board canvas has a fractional
+      // scale.
+      recordCanvas.drawRect(
+        paintBounds,
+        _backgroundPaint..color = _painter.theme.background,
       );
+      // Collect missing glyphs across all visible lines and rebuild the
+      // atlas at most once, before any line references the new tiles.
+      _painter.prepareLineGlyphs(
+          recordCanvas, lines, effectFirstLine, effectLastLine);
+      for (var i = effectFirstLine; i <= effectLastLine; i++) {
+        _painter.paintLine(
+          recordCanvas,
+          offset.translate(0, i * charHeight + _lineOffset),
+          lines[i],
+        );
+      }
+      _framePicture = recorder.endRecording();
+      _framePictureScroll = _scrollOffset;
+      _framePictureDirty = false;
+      debugFramePictureRebuilds++;
+    } else {
+      debugFramePictureHits++;
     }
+
+    // Phase 2 (replay + overlay): one native drawPicture for the whole
+    // static text layer, then only the dynamic overlay from Dart (cursor,
+    // composing text, selection, highlights).
+    canvas.drawPicture(_framePicture!);
 
     if (_terminal.buffer.absoluteCursorY >= effectFirstLine &&
         _terminal.buffer.absoluteCursorY <= effectLastLine) {
