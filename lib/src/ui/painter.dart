@@ -111,10 +111,16 @@ class TerminalPainter {
       _textRunOpPool.length +
       _cellOpPool.length;
 
-  /// Returns the ops of every cached line to the pools and clears the cache.
+  /// Returns the ops of every cached line to the pools, disposes the line
+  /// pictures and clears the cache.
   void _clearLinePaintCache() {
     for (final entry in _linePaintCache.values) {
       _recycleOps(entry.ops);
+      final picture = entry.picture;
+      if (picture != null) {
+        picture.dispose();
+        _livePictureCount--;
+      }
     }
     _linePaintCache.clear();
   }
@@ -210,6 +216,19 @@ class TerminalPainter {
   /// number of changed lines, not with the number of visible lines.
   @visibleForTesting
   int debugLineBuildCount = 0;
+
+  /// Number of lines whose cells [prepareLineGlyphs] actually walked since
+  /// this counter was last reset. Tests use it to assert the discovery pass
+  /// scales with the number of changed lines: lines with a valid paint-cache
+  /// entry provably have all their glyphs in the atlas already.
+  @visibleForTesting
+  int debugGlyphScanCount = 0;
+
+  /// Number of line pictures currently held by [_linePaintCache]. Tests use
+  /// it to assert pictures are disposed when cache entries are invalidated.
+  @visibleForTesting
+  int get debugLivePictureCount => _livePictureCount;
+  int _livePictureCount = 0;
 
   /// Number of times the current glyph atlas re-rasterized its image. Tests
   /// use it to assert frame-wide glyph discovery ([prepareLineGlyphs])
@@ -383,7 +402,25 @@ class TerminalPainter {
     if (atlas.isFull) return;
     final missing = _atlasMissingKeys..clear();
     for (var i = firstLine; i <= lastLine; i++) {
-      _collectMissingGlyphs(atlas, lines[i], missing);
+      final line = lines[i];
+      // A valid paint-cache entry proves every mergeable glyph of this line
+      // was served by this atlas instance at its current generation, so the
+      // per-cell scan can skip it entirely. The discovery pass then scales
+      // with the number of changed lines, not with the viewport size.
+      final cached = _linePaintCache[line];
+      // The atlas only grows within one instance (tiles are dropped solely by
+      // disposeAndClear, which replaces the instance), so a cache entry built
+      // with this instance at the line's current version proves every
+      // mergeable glyph of the line resolved to a tile at build time — the
+      // per-cell scan can skip the line entirely, and the discovery pass
+      // scales with the number of changed lines, not the viewport size.
+      if (cached != null &&
+          cached.version == line.version &&
+          identical(cached.atlas, atlas)) {
+        continue;
+      }
+      debugGlyphScanCount++;
+      _collectMissingGlyphs(atlas, line, missing);
     }
     if (missing.isNotEmpty) atlas.ensureAll(missing);
   }
@@ -499,23 +536,87 @@ class TerminalPainter {
     }
     debugLineBuildCount++;
     final ops = <_LinePaintOp>[];
-    _buildLine(canvas, offset, line, atlas, ops);
+    // Record the line into a picture in the same pass that records the ops:
+    // a replay can then re-emit the whole line with a single drawPicture
+    // (optionally under a translation) instead of re-walking the ops from
+    // Dart. The op list stays authoritative for the fractional-dx fallback,
+    // which must re-snap every coordinate.
+    final generationBefore = atlas?.generation ?? -1;
+    final recorder = PictureRecorder();
+    _buildLine(Canvas(recorder), offset, line, atlas, ops);
+    Picture? picture = recorder.endRecording();
+    _livePictureCount++;
+    // A mid-build atlas rebuild disposes the image the early sprite batches
+    // captured; such a picture must never be replayed. The ops are still
+    // valid (they fetch the live image), so replay them instead.
+    if (atlas != null && atlas.generation != generationBefore) {
+      picture.dispose();
+      _livePictureCount--;
+      picture = null;
+    }
     if (_linePaintCache.length >= _maxLinePaintCacheEntries) {
       _clearLinePaintCache();
     }
     // Recycle the previous entry's ops before overwriting it.
     final previous = _linePaintCache[line];
-    if (previous != null) _recycleOps(previous.ops);
-    _linePaintCache[line] = _LinePaintCache(version, offset, atlas, ops);
+    if (previous != null) {
+      _recycleOps(previous.ops);
+      previous.picture?.dispose();
+      if (previous.picture != null) _livePictureCount--;
+    }
+    _linePaintCache[line] = _LinePaintCache(version, offset, atlas, ops,
+        atlas?.generation ?? -1, picture);
+    // Emit the freshly built line through the op walk (not the picture):
+    // the op list is authoritative and this keeps every consumer — including
+    // test canvases that intercept raw draw calls — observing exactly what a
+    // build emitted before pictures existed. The picture fast path only
+    // kicks in for subsequent replays of unchanged lines.
+    _replayLine(canvas, offset, _snap(offset.dy), _linePaintCache[line]!,
+        usePicture: false);
   }
 
   /// Replays the ops recorded by [_buildLine] for an unchanged line.
+  ///
+  /// When [usePicture] is true (the default) and the line's picture is valid,
+  /// the whole line is re-emitted with a single [Canvas.drawPicture]. The
+  /// build pass passes false so a fresh build emits its raw ops exactly like
+  /// the pre-picture implementation.
   void _replayLine(
     Canvas canvas,
     Offset offset,
     double snappedY,
-    _LinePaintCache cache,
-  ) {
+    _LinePaintCache cache, {
+    bool usePicture = true,
+  }) {
+    // Fast path: when the line's picture is still valid (the atlas image it
+    // baked has not been re-rasterized since) and the paint offset moved by
+    // whole snap-grid steps, translating the recorded picture reproduces the
+    // exact same snapped coordinates as a fresh build — one native drawPicture
+    // call replaces the whole Dart-side op walk. Fractional offsets (board
+    // pan/zoom) must re-snap every coordinate and fall through to the ops.
+    final picture = usePicture ? cache.picture : null;
+    if (picture != null) {
+      final atlas = cache.atlas;
+      final pictureValid = atlas == null || atlas.generation == cache.atlasGeneration;
+      if (pictureValid && _dpr > 0) {
+        final dxDelta = offset.dx - cache.offset.dx;
+        final dyDelta = offset.dy - cache.offset.dy;
+        final dpr = _dpr;
+        final dxGrid = dxDelta * dpr;
+        final dyGrid = dyDelta * dpr;
+        if (dxGrid == dxGrid.roundToDouble() && dyGrid == dyGrid.roundToDouble()) {
+          if (dxDelta == 0 && dyDelta == 0) {
+            canvas.drawPicture(picture);
+          } else {
+            canvas.save();
+            canvas.translate(dxDelta, dyDelta);
+            canvas.drawPicture(picture);
+            canvas.restore();
+          }
+          return;
+        }
+      }
+    }
     final cellWidth = _cellSize.width;
     final atlas = cache.atlas;
     // When the line is painted at the same offset it was recorded at, every
@@ -1366,11 +1467,26 @@ final class _CellOp extends _LinePaintOp {
 /// [version] and [GlyphAtlas] instance it was built with. [offset] is the
 /// paint offset the ops were recorded at; replaying at the same offset reuses
 /// the baked geometry verbatim.
+///
+/// [picture] is the same ops recorded into a [ui.Picture] — when it is valid
+/// (its atlas image was not re-rasterized since, see [atlasGeneration]) the
+/// replay path can re-emit the whole line with a single drawPicture instead
+/// of re-walking the ops from Dart. Null when the build saw a mid-line atlas
+/// rebuild (the baked image reference was disposed).
 final class _LinePaintCache {
-  const _LinePaintCache(this.version, this.offset, this.atlas, this.ops);
+  _LinePaintCache(
+    this.version,
+    this.offset,
+    this.atlas,
+    this.ops,
+    this.atlasGeneration,
+    this.picture,
+  );
 
   final int version;
   final Offset offset;
   final GlyphAtlas? atlas;
   final List<_LinePaintOp> ops;
+  final int atlasGeneration;
+  Picture? picture;
 }

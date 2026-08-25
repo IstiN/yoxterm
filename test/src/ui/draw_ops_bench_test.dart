@@ -117,27 +117,38 @@ void main() {
     );
     painter.debugDevicePixelRatio = 1.0;
 
-    // First pass builds (cache miss), second pass at the same offsets replays
-    // the recorded ops, third pass at shifted offsets replays with recomputed
-    // (re-snapped) coordinates. All three must emit identical op counts.
+    // The build pass emits raw ops; an unchanged-line replay at the same or
+    // snap-grid-aligned offset re-emits the whole line with a single
+    // drawPicture per line; a fractional-dx replay (board pan) falls back to
+    // the op walk with re-snapped coordinates. The glyph discovery pass runs
+    // first (like the render loop) so the atlas does not grow mid-build,
+    // which would discard the recorded pictures.
+    final warm = _CountingCanvas();
+    painter.prepareLineGlyphs(warm, terminal.buffer.lines, 0,
+        terminal.buffer.lines.length - 1);
     final built = _CountingCanvas();
-    final replayedSame = _CountingCanvas();
-    final replayedShifted = _CountingCanvas();
     final lines = terminal.buffer.lines;
     for (var li = 0; li < lines.length; li++) {
       painter.paintLine(built, Offset(0, li * 16.0), lines[li]);
     }
     expect(painter.debugLineBuildCount, lines.length);
+
+    final replayedSame = _CountingCanvas();
+    final replayedShifted = _CountingCanvas();
+    final replayedScrolled = _CountingCanvas();
     for (var li = 0; li < lines.length; li++) {
       painter.paintLine(replayedSame, Offset(0, li * 16.0), lines[li]);
       painter.paintLine(replayedShifted, Offset(1.5, li * 16.0 + 0.5), lines[li]);
+      painter.paintLine(replayedScrolled, Offset(0, li * 16.0 + 32.0), lines[li]);
     }
     expect(painter.debugLineBuildCount, lines.length,
-        reason: 'second and third passes must be pure replays');
+        reason: 'replays must not rebuild');
 
     int opsOf(_CountingCanvas c) => c.rects + c.paragraphs + c.atlasCalls;
-    expect(opsOf(replayedSame), opsOf(built));
-    expect(replayedSame.atlasSprites, built.atlasSprites);
+    // Same offset and grid-aligned scroll: one native picture per line.
+    expect(opsOf(replayedSame), 0);
+    expect(opsOf(replayedScrolled), 0);
+    // Fractional dx must fall back to the op walk and emit identical counts.
     expect(opsOf(replayedShifted), opsOf(built));
     expect(replayedShifted.atlasSprites, built.atlasSprites);
   });

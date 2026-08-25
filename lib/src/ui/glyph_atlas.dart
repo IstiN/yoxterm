@@ -89,6 +89,12 @@ class GlyphAtlas {
   /// assert that frame-wide glyph discovery batches into a single rebuild.
   var debugRebuildCount = 0;
 
+  /// Monotonically increasing counter bumped on every image re-rasterization.
+  /// Consumers that bake the current [image] into recorded render state (e.g.
+  /// the painter's per-line pictures) use it to detect that their baked image
+  /// reference was disposed and must not be reused.
+  var generation = 0;
+
   /// The current atlas image, or null when no glyph has been rasterized yet.
   ui.Image? get image => _image;
 
@@ -183,6 +189,7 @@ class GlyphAtlas {
     _image?.dispose();
     _image = newImage;
     debugRebuildCount++;
+    generation++;
   }
 
   ui.Paragraph _layoutGlyph(int key) {
