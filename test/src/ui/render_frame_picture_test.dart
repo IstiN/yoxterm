@@ -1,4 +1,8 @@
+import 'dart:typed_data' show Float64List;
+import 'dart:ui' show Picture;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ContainerLayer;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:yoxterm/src/ui/render.dart';
 import 'package:yoxterm/xterm.dart';
@@ -120,4 +124,75 @@ void main() {
         reason: 'selection is overlay-only and must not invalidate the text');
     expect(ro.debugFramePictureHits, 1);
   });
+
+  testWidgets(
+      'repaint at a shifted position translates the frame picture, not bakes '
+      'a stale one', (tester) async {
+    final terminal = Terminal();
+    terminal.write('hello frame picture\nworld');
+    final ro = await pumpTerminal(tester, terminal);
+    final rebuildsAfterFirstPaint = ro.debugFramePictureRebuilds;
+
+    // Paint manually at two different offsets — the render object's
+    // position within its parent changes across board switches without
+    // any layout/scroll/terminal change. The replayed static layer must
+    // follow the new offset (translate before drawPicture), otherwise it
+    // renders at the stale position and the newly exposed region stays
+    // blank until a manual resize.
+    final first = _CallLogCanvas();
+    ro.paint(_MockPaintingContext(first), Offset.zero);
+
+    final second = _CallLogCanvas();
+    ro.paint(_MockPaintingContext(second), const Offset(0, 50));
+
+    expect(ro.debugFramePictureRebuilds, rebuildsAfterFirstPaint,
+        reason: 'a pure position shift must re-use the recorded picture');
+    final translateIndex = second.calls.indexWhere((c) => c.startsWith('translate'));
+    final pictureIndex = second.calls.indexWhere((c) => c == 'drawPicture');
+    expect(translateIndex, greaterThanOrEqualTo(0),
+        reason: 'the replay must be translated to the current offset');
+    expect(pictureIndex, greaterThan(translateIndex),
+        reason: 'drawPicture must happen after the translation');
+  });
+}
+
+/// A [PaintingContext] whose canvas is the mock, so direct `ro.paint(...)`
+/// calls in tests emit into the call log instead of a real picture layer.
+class _MockPaintingContext extends PaintingContext {
+  _MockPaintingContext(this.mockCanvas)
+      : super(ContainerLayer(), Offset.zero & const Size(4000, 4000));
+
+  final Canvas mockCanvas;
+
+  @override
+  Canvas get canvas => mockCanvas;
+}
+
+/// Records the sequence of canvas calls by name, for asserting replay order.
+class _CallLogCanvas implements Canvas {
+  final calls = <String>[];
+
+  @override
+  void translate(double dx, double dy) => calls.add('translate($dx,$dy)');
+
+  @override
+  void drawPicture(Picture picture) => calls.add('drawPicture');
+
+  @override
+  void drawRect(Rect rect, Paint paint) => calls.add('drawRect');
+
+  @override
+  void drawRRect(RRect rrect, Paint paint) => calls.add('drawRRect');
+
+  @override
+  void save() => calls.add('save');
+
+  @override
+  void restore() => calls.add('restore');
+
+  @override
+  Float64List getTransform() => Matrix4.identity().storage;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => null;
 }

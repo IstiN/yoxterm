@@ -90,9 +90,6 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// a per-line walk.
   Picture? _framePicture;
 
-  /// Scroll offset the frame picture was recorded at.
-  double _framePictureScroll = 0;
-
   /// Set when a repaint arrives with a terminal/controller change that can
   /// alter line content (any terminal notification, theme, or resize). The
   /// next [paint] re-records the frame picture after replaying the lines
@@ -680,10 +677,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     // re-record background + every visible line into a single Picture. The
     // per-line painter cache stays warm inside the recording pass, so a
     // rebuild costs exactly the per-line walk plus the recording itself.
+    // The picture records at [Offset.zero]; the replay translates it to the
+    // current paint offset, so a parent repositioning this render object
+    // (board switch) is a pure translate — no re-record, no stale geometry.
     final framePicture = _framePicture;
-    if (_framePictureDirty ||
-        framePicture == null ||
-        _framePictureScroll != _scrollOffset) {
+    if (_framePictureDirty || framePicture == null) {
       _framePicture?.dispose();
       final recorder = PictureRecorder();
       final recordCanvas = Canvas(recorder);
@@ -691,7 +689,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       // pixel-perfect edges even when the board canvas has a fractional
       // scale.
       recordCanvas.drawRect(
-        paintBounds,
+        Offset.zero & size,
         _backgroundPaint..color = _painter.theme.background,
       );
       // Collect missing glyphs across all visible lines and rebuild the
@@ -701,12 +699,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       for (var i = effectFirstLine; i <= effectLastLine; i++) {
         _painter.paintLine(
           recordCanvas,
-          offset.translate(0, i * charHeight + _lineOffset),
+          Offset(0, i * charHeight + _lineOffset),
           lines[i],
         );
       }
       _framePicture = recorder.endRecording();
-      _framePictureScroll = _scrollOffset;
       _framePictureDirty = false;
       debugFramePictureRebuilds++;
     } else {
@@ -714,9 +711,16 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     }
 
     // Phase 2 (replay + overlay): one native drawPicture for the whole
-    // static text layer, then only the dynamic overlay from Dart (cursor,
-    // composing text, selection, highlights).
-    canvas.drawPicture(_framePicture!);
+    // static text layer at the current position, then only the dynamic
+    // overlay from Dart (cursor, composing text, selection, highlights).
+    if (offset == Offset.zero) {
+      canvas.drawPicture(_framePicture!);
+    } else {
+      canvas.save();
+      canvas.translate(offset.dx, offset.dy);
+      canvas.drawPicture(_framePicture!);
+      canvas.restore();
+    }
 
     if (_terminal.buffer.absoluteCursorY >= effectFirstLine &&
         _terminal.buffer.absoluteCursorY <= effectLastLine) {
