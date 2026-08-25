@@ -247,7 +247,7 @@ picture). Listed in (Flutter fit × impact / effort).
 2. **Adjacent damaged-rect merging + overdraw padding** (port of alacritty `display/damage.rs:226-275` and `RenderDamageIterator::next`). N consecutive damaged rows become 1–2 `Rect`s instead of N clip rects. With Flutter's `RepaintBoundary` + `canvas.clipRect` this is the cheapest big-win remaining.
 3. **One `canvas.drawAtlas` per panel per repaint, no per-cell `TextPainter`** (port of alacritty `Batch.vertices` + kitty `gl.c`'s `map_buffer_range`). Collapse ~10k `drawText` calls per scroll into one GPU draw. The painter already has a `GlyphAtlas`; it's the dispatch granularity that needs work. *Partially shipped in `644dc14` via per-row recorded pictures.*
 4. **`beginPaint` / `endPaint` split with an applied-styles cache** (port of ghostty two-phase `render.zig` `beginUpdate`/`endUpdate`). Cache the per-row style runs from the prior frame; on a semantic match, skip the per-cell style fill. Eliminates the largest allocation in `CustomPaint.paint` today. *Shipped in `012c74c` as the two-phase split (static-layer frame picture + overlay-only repaints); the applied-styles cache variant is not needed — the per-line painter cache already eliminates the per-cell style walk.*
-5. **Vectorised UTF-8 + escape-bounded parse via FFI** (port of ghostty `stream.zig::nextSliceCapped` and kitty `simd-string.h`). 5–10× parser throughput on heavy `cat` / `less` style input. The Dart-side equivalent (the byte-by-byte `while` loop in `Utf8StreamDecoder`) is the single hottest CPU consumer on `cat huge.log` today.
+5. **Vectorised UTF-8 + escape-bounded parse via FFI** (port of ghostty `stream.zig::nextSliceCapped` and kitty `simd-string.h`). 5–10× parser throughput on heavy `cat` / `less` style input. The Dart-side equivalent (the byte-by-byte `while` loop in `Utf8StreamDecoder`) is the single hottest CPU consumer on `cat huge.log` today. *Status — evaluated, partially shipped, remainder deferred: the Dart-feasible core already shipped as `d294b97` (persistent byte parser, inline incremental UTF-8, zero-copy ASCII fast path, bulk text runs). A bulk CSI param-accumulation variant was implemented and A/B measured: 51.0 MB/s avg vs 51.0 MB/s baseline on the SGR-heavy bench — dead even, because real-world CSI sequences carry only 2–4 digits and per-byte `consume()` is not a bottleneck under the JIT; the change was reverted to avoid ~70 lines of duplicated accumulator logic for zero measured gain. What remains genuinely open is the FFI SIMD slice-scanner itself — a native library built per platform (macOS/Linux/Windows), a real but heavy project, deferred until the parser is measured as the dominant cost again.*
 
 A bonus, lower-priority item: **adaptive `repaint_delay` / `input_delay`
 knobs** (port of kitty's `input_delay`/`repaint_delay`). Mirror via
@@ -341,6 +341,9 @@ on-screen cost closest to kitty's reported ~6 % idle CPU figure.
 
 - `012c74c` — timeline row 10 (two-phase frame picture, roadmap item 4
   shipped), §4.3 status note updated.
+- item 5 evaluation — bulk CSI param accumulation implemented, A/B measured
+  dead even (51.0 vs 51.0 MB/s SGR bench), reverted with rationale; §4.3
+  item 5 records the verdict and the remaining FFI-SIMD scope.
 - `644dc14` — timeline row 9 (per-line `ui.Picture` replay + glyph-discovery
   dirty skip), live measurements refreshed (idle 0.0–0.1 % on the debug
   build vs 14–18 % on release `v1.0.286`; visible-flood peaks ≤12 % vs
