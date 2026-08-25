@@ -31,24 +31,28 @@ on the same Apple Silicon Mac used for live verification.
 | 6 | `c22f9aa` | Paint+layout cascade coalescing: layout and paint ride the same frame callback. | One write burst → **1 paint** (was 2). 5 frames × 20 writes: **6 → 5 paints**; 1 write + 2 pumps: **2 → 1 paint**. |
 | 7 | `69e0969` | `TerminalView._handleKeyEvent` always claims printable keys as `HANDLED` so the enclosing `CustomKeyboardListener` cannot fall through to `onInsert` and double-write the same character to `onOutput`. | Fixes the "kimi" → "kkiiii" regression on the printable path. |
 | 8 | `68d2c02` | `TerminalView` suppresses its own scrollbar (the host provides its themed one). | Resolved the two-scrollbars regression in the yoloit panel. |
-| 9 | (CHANGELOG `4.0.2` → `4.1.0`) | Bumped to `4.1.0`; CHANGELOG and README benchmark table updated. | — |
+| 9 | `644dc14` | Per-line `ui.Picture` replay: every rebuilt line records its ops into a `Picture`; replays at snap-grid-aligned offsets re-emit the whole line with **one native `drawPicture`** (optionally under a translation) instead of re-walking ops from Dart. `GlyphAtlas.generation` guards against mid-build atlas re-rasterizations; fractional-dx replays fall back to the exact op walk. Plus glyph-discovery dirty skip: `prepareLineGlyphs` skips lines with a valid paint-cache entry. | Idle frames walk **zero cells** (was: every visible cell — 1920 `getCellData` calls/frame at 80×24). Live yoloit debug: idle **0.0–0.1 % CPU** (release v1.0.286 same rig: 14–18 %), visible-flood peaks **≤12 %** (was 65 %), 20 M-line max-rate flood ~0 % average. Package bench: idle 38→35 µs/frame, warm 85→80 µs/frame. |
+| 10 | (CHANGELOG `4.0.2` → `4.1.0`) | Bumped to `4.1.0`; CHANGELOG and README benchmark table updated. | — |
 
-### Live measurements (this machine, yoloit `v1.0.286` running)
+### Live measurements (this machine)
 
-Captured against the running yoloit prod app (which is the yoxterm-fork
-backend the user is using right now).
-
-- **Idle (`v1.0.286` running, panel mounted, no input):** 2.8 % – 24.5 % CPU
+- **Idle (`v1.0.286` release running, panel mounted, no input):** 2.8 % – 24.5 % CPU
   (median ~13 %). Variance is the chat panel glow animation, which is
   now throttled to 30 fps (the previous 60-fps `RenderOpacity.saveLayer` was
   the largest contributor to idle CPU before the glow throttle).
+- **Idle after per-line picture replay + glyph-discovery dirty skip
+  (`644dc14`, debug build, same rig, same `ps %cpu` metric):**
+  **0.0 – 0.1 % CPU.**
 - **500 k-line seq flood into a visible terminal panel:** peak **65.6 %**,
-  completes in ~1 s. Before the recent work the same flood on an earlier
-  build had visibly higher peak because of the paint cascade.
+  completes in ~1 s (release `v1.0.286`). Same flood on the `644dc14` debug
+  build: peak **≤12 %**.
 - **300 M-line max-rate `seq` flood, visible panel:** sustained
   **120 % – 140 %** (one full core, bounded, no runaway). Same flood with
   the panel **off-screen:** **~37 %** (raster thread completely idle — the
-  batched-output path is doing only parse + buffer, no paint).
+  batched-output path is doing only parse + buffer, no paint). A 20 M-line
+  max-rate flood on the `644dc14` debug build averaged **~0 %** visible
+  (`ps %cpu` decaying average — the work lands in sub-second bursts that
+  mostly fall between scheduler samples; no sustained load remains).
 - **Backspace** in the live debug panel: works (writes `\b \b`, zsh's
   erase, removes the last char cleanly).
 - **macOS codesign / notarization** of the built `v1.0.286` DMG:
@@ -230,13 +234,16 @@ X's. Useful as a "no frills" upper-bound reference.
 
 ### 4.3 The five yoxterm ports the research recommends (in order)
 
-These are not implemented. They are the items that, after the Alacritty
-gap analysis, the broader field survey identified as still on the table.
-Listed roughly in (Flutter fit × impact / effort).
+Status note (`644dc14`): item 1 is **partially shipped** (the glyph-discovery
+walk now skips clean lines and idle frames walk zero cells; the paint loop
+still visits every visible row, but each unchanged row costs a single native
+`drawPicture`). Item 3 is partially covered by the same change (one native
+picture per row per repaint instead of several Dart-side canvas calls).
+Items 2, 4 and 5 remain open. Listed in (Flutter fit × impact / effort).
 
-1. **Per-row `dirty: Uint8List` + `globalDirty: bool` so the painter iterates only dirty rows** (port of kitty `LineAttrs.has_dirty_text` and ghostty `Dirty{false,partial,full}`). Single line of dispatcher logic; ~order-of-magnitude reduction in painter work on `cat huge.log` and similar.
+1. **Per-row `dirty: Uint8List` + `globalDirty: bool` so the painter iterates only dirty rows** (port of kitty `LineAttrs.has_dirty_text` and ghostty `Dirty{false,partial,full}`). Single line of dispatcher logic; ~order-of-magnitude reduction in painter work on `cat huge.log` and similar. *Partially shipped in `644dc14`: discovery walk skips clean lines, idle frames walk zero cells, unchanged rows replay as one native drawPicture each.*
 2. **Adjacent damaged-rect merging + overdraw padding** (port of alacritty `display/damage.rs:226-275` and `RenderDamageIterator::next`). N consecutive damaged rows become 1–2 `Rect`s instead of N clip rects. With Flutter's `RepaintBoundary` + `canvas.clipRect` this is the cheapest big-win remaining.
-3. **One `canvas.drawAtlas` per panel per repaint, no per-cell `TextPainter`** (port of alacritty `Batch.vertices` + kitty `gl.c`'s `map_buffer_range`). Collapse ~10k `drawText` calls per scroll into one GPU draw. The painter already has a `GlyphAtlas`; it's the dispatch granularity that needs work.
+3. **One `canvas.drawAtlas` per panel per repaint, no per-cell `TextPainter`** (port of alacritty `Batch.vertices` + kitty `gl.c`'s `map_buffer_range`). Collapse ~10k `drawText` calls per scroll into one GPU draw. The painter already has a `GlyphAtlas`; it's the dispatch granularity that needs work. *Partially shipped in `644dc14` via per-row recorded pictures.*
 4. **`beginPaint` / `endPaint` split with an applied-styles cache** (port of ghostty two-phase `render.zig` `beginUpdate`/`endUpdate`). Cache the per-row style runs from the prior frame; on a semantic match, skip the per-cell style fill. Eliminates the largest allocation in `CustomPaint.paint` today.
 5. **Vectorised UTF-8 + escape-bounded parse via FFI** (port of ghostty `stream.zig::nextSliceCapped` and kitty `simd-string.h`). 5–10× parser throughput on heavy `cat` / `less` style input. The Dart-side equivalent (the byte-by-byte `while` loop in `Utf8StreamDecoder`) is the single hottest CPU consumer on `cat huge.log` today.
 
@@ -283,7 +290,9 @@ attempt:
 
 Because the research repeatedly converged on it, here's a more concrete
 sketch of the top item, in case the next implementation cycle wants to
-start there. **Not implemented in `4.1.0`.**
+start there. **Partially shipped in `644dc14`** (glyph-discovery walk skips
+clean lines; unchanged rows replay as one native `drawPicture`); the full
+row-skip in the paint loop below is still open.
 
 Today `yoxterm` rebuilds and repaints every visible row on every
 `markNeedsPaint`. The recorded-op replay means unchanged rows are cheap,
@@ -328,6 +337,10 @@ on-screen cost closest to kitty's reported ~6 % idle CPU figure.
 
 ## 7. Change log (this document)
 
+- `644dc14` — timeline row 9 (per-line `ui.Picture` replay + glyph-discovery
+  dirty skip), live measurements refreshed (idle 0.0–0.1 % on the debug
+  build vs 14–18 % on release `v1.0.286`; visible-flood peaks ≤12 % vs
+  65 %), §4.3/§5 status notes for the partially shipped roadmap items.
 - `4.1.0` — initial publication of this document alongside the
   `4.0.2 → 4.1.0` release. Captures: the §1 perf timeline, the
   §2 alacritty portability table, the §3 Flutter-only deltas, the §4

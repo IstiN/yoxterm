@@ -34,6 +34,8 @@ machine-dependent, the deltas are not):
 | Canvas ops per htop frame (1920 cells) | 1714 (218 rects + 1496 paragraphs) | **49** (~35× fewer) | run merging + glyph atlas |
 | Frame paint under output flood | — | **50 µs/frame** | atlas hits, no layout |
 | Idle frame repaint | — | **36 µs/frame** | recorded-op replay, zero rebuilds |
+| Idle frame replay dispatch | per-op Dart walk (3–10 calls/line) | **1 native `drawPicture`/line** | per-line recorded pictures |
+| Idle glyph-discovery scan | every visible cell (~1920/frame at 80×24) | **0 cells** (clean lines skipped) | cache-entry dirty skip |
 | Partial damage (2/24 lines changed) | — | **37 µs/frame** | version-based line damage |
 | TUI frame (neovim/btop, mode 2026) | repaint per PTY chunk | **1 repaint per TUI frame** | BSU/ESU + 150 ms failsafe |
 
@@ -58,6 +60,13 @@ What changed under the hood:
   skip the escape parser entirely; scrollback lines are recycled rather than
   re-allocated, and line resets only touch the occupied prefix
   (alacritty-style high-water mark).
+- **Recorded-picture line replay** — each rebuilt line's canvas ops are
+  recorded into a `ui.Picture` alongside the op list; replays of unchanged
+  lines at snap-grid-aligned offsets re-emit the whole line with a single
+  native `drawPicture` (optionally under a translation), and the frame-wide
+  glyph-discovery pass skips lines whose paint cache is still valid — idle
+  frames walk zero cells. A generation counter on the atlas discards
+  pictures whose baked atlas image was re-rasterized mid-build.
 - **Listener fast paths** — observable terminal notifications avoid
   allocation and iteration overhead when nothing is subscribed.
 - **Output paint throttle** — painting is capped at display refresh instead
