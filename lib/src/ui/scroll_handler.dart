@@ -76,6 +76,12 @@ class _TerminalScrollGestureHandlerState
   void _onTerminalUpdated() {
     if (isAltBuffer != widget.terminal.isUsingAltBuffer) {
       isAltBuffer = widget.terminal.isUsingAltBuffer;
+      // Entering the alt buffer rebuilds the InfiniteScrollView, whose fresh
+      // ScrollPosition starts at pixels = 0. Resync the delta baseline so the
+      // stale offset from the previous alt-buffer visit cannot swallow or
+      // invert the first scroll gestures after the switch (copilot-style
+      // TUIs switch buffers on every view change).
+      lastLineOffset = 0;
       setState(() {});
     }
   }

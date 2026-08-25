@@ -83,6 +83,47 @@ void main() {
       expect(output.join(), contains('\x1B[B'));
     });
 
+    testWidgets(
+        'scroll survives a scrollable re-attach without emitting an '
+        'inverted burst', (tester) async {
+      final output = <String>[];
+      final terminal = Terminal(onOutput: output.add);
+      terminal.useAltBuffer();
+
+      await tester.pumpWidget(buildHandler(terminal: terminal));
+
+      // Scroll down 100px (5 arrow-down events).
+      await tester.drag(
+        find.byType(TerminalScrollGestureHandler),
+        const Offset(0, -100),
+      );
+      await tester.pump();
+      output.clear();
+
+      // Leave and re-enter the alt buffer: the InfiniteScrollView is
+      // disposed and rebuilt, so its ScrollPosition restarts at pixels = 0.
+      // The stale lastLineOffset must NOT turn the next physical scroll
+      // into an inverted burst (or swallow it entirely).
+      terminal.write('\x1b[?47l');
+      await tester.pump();
+      terminal.write('\x1b[?47h');
+      await tester.pump();
+
+      // A fresh downward drag must still send exactly downward events.
+      await tester.drag(
+        find.byType(TerminalScrollGestureHandler),
+        const Offset(0, -60),
+      );
+      await tester.pump();
+
+      final arrowsDown = '\x1B[B'.allMatches(output.join()).length;
+      final arrowsUp = '\x1B[A'.allMatches(output.join()).length;
+      expect(arrowsDown, 3,
+          reason: '60px at 20px/line = 3 arrow-down events');
+      expect(arrowsUp, 0,
+          reason: 'no inverted burst may be emitted after a re-attach');
+    });
+
     testWidgets('dragging down simulates arrow up keys', (tester) async {
       final output = <String>[];
       final terminal = Terminal(onOutput: output.add);
