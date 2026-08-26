@@ -105,6 +105,11 @@ What changed under the hood:
   impact, an Alacritty portability table, and a cross-terminal research
   summary (ghostty, kitty, Rio, WezTerm, iTerm2, Contour, st) with the
   five Flutter-feasible ports we have not yet shipped.
+- 📐 [Performance best practices](docs/PERFORMANCE_BEST_PRACTICES.md) —
+  the ten distilled, reusable rules behind those numbers: record-and-replay
+  pictures, damage skipping, boundary batching, persistent parsers, paint
+  throttling, object pools, atlas tinting, lifecycle baselines, and the
+  measurement workflow that validates each.
 
 ## Features
 

@@ -33,7 +33,9 @@ on the same Apple Silicon Mac used for live verification.
 | 8 | `68d2c02` | `TerminalView` suppresses its own scrollbar (the host provides its themed one). | Resolved the two-scrollbars regression in the yoloit panel. |
 | 9 | `644dc14` | Per-line `ui.Picture` replay: every rebuilt line records its ops into a `Picture`; replays at snap-grid-aligned offsets re-emit the whole line with **one native `drawPicture`** (optionally under a translation) instead of re-walking ops from Dart. `GlyphAtlas.generation` guards against mid-build atlas re-rasterizations; fractional-dx replays fall back to the exact op walk. Plus glyph-discovery dirty skip: `prepareLineGlyphs` skips lines with a valid paint-cache entry. | Idle frames walk **zero cells** (was: every visible cell — 1920 `getCellData` calls/frame at 80×24). Live yoloit debug: idle **0.0–0.1 % CPU** (release v1.0.286 same rig: 14–18 %), visible-flood peaks **≤12 %** (was 65 %), 20 M-line max-rate flood ~0 % average. Package bench: idle 38→35 µs/frame, warm 85→80 µs/frame. |
 | 10 | `012c74c` | Two-phase frame picture (ghostty `beginUpdate`/`endUpdate` port, roadmap item 4): `RenderTerminal` records the static viewport layer (background + all visible lines) into one `Picture`; every repaint replays it with **one native `drawPicture`** and re-draws only the dynamic overlay (cursor, composing, selection, highlights) from Dart. Invalidation on terminal change / scroll / theme / style / scaler / fonts / layout / resize; disposed on detach. | Overlay-only repaints (cursor blink, selection drag, focus change) cost **zero** line walks — was one `drawPicture`-per-line (24/frame at 80×24). Contract pinned by `render_frame_picture_test.dart`. |
-| 11 | (CHANGELOG `4.0.2` → `4.1.0`) | Bumped to `4.1.0`; CHANGELOG and README benchmark table updated. | — |
+| 11 | `aa54230` | Frame picture records at `Offset.zero` and replays **translated** to the current paint offset. | Fixes the regression shipped with `012c74c`: a board switch repositions the render object without layout changes, the baked-offset picture rendered at the stale position and the exposed region (TUI input rows) stayed blank until a manual resize. |
+| 12 | `e095fa2` | Alt-buffer scroll baseline (`lastLineOffset`) resets to 0 on every buffer transition. | Fixes intermittent dead scroll in TUIs that switch buffers per view (copilot): a rebuilt `InfiniteScrollView` starts at `pixels = 0`, so the stale baseline swallowed/inverted the first scroll gestures after the switch. |
+| 13 | (CHANGELOG `4.0.2` → `4.1.0`) | Bumped to `4.1.0`; CHANGELOG and README benchmark table updated. | — |
 
 ### Live measurements (this machine)
 
@@ -344,6 +346,9 @@ on-screen cost closest to kitty's reported ~6 % idle CPU figure.
 - item 5 evaluation — bulk CSI param accumulation implemented, A/B measured
   dead even (51.0 vs 51.0 MB/s SGR bench), reverted with rationale; §4.3
   item 5 records the verdict and the remaining FFI-SIMD scope.
+- `aa54230` / `e095fa2` — timeline rows 11–12 (translate-replay and
+  scroll-baseline regressions shipped and fixed); distilled rules moved to
+  [PERFORMANCE_BEST_PRACTICES.md](PERFORMANCE_BEST_PRACTICES.md).
 - `644dc14` — timeline row 9 (per-line `ui.Picture` replay + glyph-discovery
   dirty skip), live measurements refreshed (idle 0.0–0.1 % on the debug
   build vs 14–18 % on release `v1.0.286`; visible-flood peaks ≤12 % vs
