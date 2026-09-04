@@ -251,7 +251,16 @@ class TerminalViewState extends State<TerminalView> {
     child = TerminalScrollGestureHandler(
       terminal: widget.terminal,
       simulateScroll: widget.simulateScroll,
-      getCellOffset: (offset) => renderTerminal.getCellOffset(offset),
+      // Scroll gestures report GLOBAL coordinates (PointerEvent.position),
+      // while RenderTerminal.getCellOffset expects local ones. Without the
+      // conversion the encoded mouse position is shifted by the window
+      // origin, and mouse-reporting TUIs (claude code, copilot) ignore
+      // wheels landing on the wrong cell — the scroll feels dead.
+      getCellOffset: (offset) {
+        final box = renderTerminal;
+        final local = box.hasSize ? box.globalToLocal(offset) : offset;
+        return box.getCellOffset(local);
+      },
       getLineHeight: () => renderTerminal.lineHeight,
       child: child,
     );
