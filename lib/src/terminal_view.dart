@@ -174,7 +174,18 @@ class TerminalViewState extends State<TerminalView> {
     _shortcutManager = ShortcutManager(
       shortcuts: widget.shortcuts ?? defaultTerminalShortcuts,
     );
+    _isAltBuffer = widget.terminal.isUsingAltBuffer;
+    widget.terminal.addListener(_onTerminalUpdated);
     super.initState();
+  }
+
+  bool _isAltBuffer = false;
+
+  void _onTerminalUpdated() {
+    final alt = widget.terminal.isUsingAltBuffer;
+    if (alt != _isAltBuffer && mounted) {
+      setState(() => _isAltBuffer = alt);
+    }
   }
 
   @override
@@ -197,12 +208,18 @@ class TerminalViewState extends State<TerminalView> {
       }
       _scrollController = widget.scrollController ?? ScrollController();
     }
+    if (oldWidget.terminal != widget.terminal) {
+      oldWidget.terminal.removeListener(_onTerminalUpdated);
+      widget.terminal.addListener(_onTerminalUpdated);
+      _isAltBuffer = widget.terminal.isUsingAltBuffer;
+    }
     _shortcutManager.shortcuts = widget.shortcuts ?? defaultTerminalShortcuts;
     super.didUpdateWidget(oldWidget);
   }
 
   @override
   void dispose() {
+    widget.terminal.removeListener(_onTerminalUpdated);
     if (widget.focusNode == null) {
       _focusNode.dispose();
     }
@@ -222,7 +239,7 @@ class TerminalViewState extends State<TerminalView> {
       // Host applications typically provide their own themed scrollbar
       // (e.g. yoloit's purple RawScrollbar). Suppress xterm's inner
       // scrollbar so we don't render two bars side by side.
-      behavior: const _NoScrollbarScrollBehavior(),
+      behavior: _NoScrollbarScrollBehavior(altBuffer: _isAltBuffer),
       child: Scrollable(
         key: _scrollableKey,
         controller: _scrollController,
@@ -600,8 +617,26 @@ class _TerminalView extends LeafRenderObjectWidget {
 /// Scroll behavior that suppresses the default scrollbar. The host
 /// application provides its own themed scrollbar (see yoloit's purple
 /// RawScrollbar); without this, two scrollbars render side by side.
+///
+/// When the terminal switches to the alternate screen buffer (TUI apps),
+/// the inner scrollback Scrollable must become inert to pointer signals:
+/// its position sits at a zero-height scroll range in alt mode, so Flutter's
+/// "would this scroll actually move?" interest gate still passes for one
+/// wheel direction and the Scrollable wins the pointer-signal resolver —
+/// swallowing the wheel before the outer InfiniteScrollView (which encodes
+/// wheel events as mouse reports for the TUI) can see it.
 class _NoScrollbarScrollBehavior extends ScrollBehavior {
-  const _NoScrollbarScrollBehavior();
+  const _NoScrollbarScrollBehavior({this.altBuffer = false});
+
+  final bool altBuffer;
+
+  @override
+  ScrollPhysics getScrollPhysics(BuildContext context) {
+    if (altBuffer) {
+      return const NeverScrollableScrollPhysics();
+    }
+    return super.getScrollPhysics(context);
+  }
 
   @override
   Widget buildScrollbar(
