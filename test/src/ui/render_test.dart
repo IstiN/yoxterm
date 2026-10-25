@@ -245,6 +245,72 @@ void main() {
 
       expect(terminal.buffer.getText(controller.selection!), 'el');
     });
+
+    testWidgets('repaint over a huge selection only builds visible segments',
+        (tester) async {
+      final terminal = Terminal();
+      final controller = TerminalController();
+      final rt = await _pump(tester, terminal, controller: controller);
+
+      // Fill the buffer with far more lines than the viewport shows.
+      for (var i = 0; i < 200; i++) {
+        terminal.write('line $i\r\n');
+      }
+      await tester.pump();
+      rt.debugResetPaintCounter();
+
+      final lastLine = terminal.buffer.lines.length - 1;
+      controller.setSelection(
+        terminal.buffer.createAnchor(0, 0),
+        terminal.buffer.createAnchor(0, lastLine),
+      );
+
+      final buildsBefore = rt.debugOverlaySegmentBuilds;
+      await tester.pump();
+
+      final built = rt.debugOverlaySegmentBuilds - buildsBefore;
+      expect(built, greaterThan(0));
+      expect(built, lessThanOrEqualTo(terminal.viewHeight));
+    });
+  });
+
+  group('composing text', () {
+    testWidgets('caches the composing paragraph across repaints',
+        (tester) async {
+      final terminal = Terminal();
+      final rt = await _pump(tester, terminal);
+
+      rt.composingText = 'nie';
+      await tester.pump();
+      expect(rt.debugComposingParagraphBuilds, 1);
+      expect(rt.debugIsComposingParagraphCached, isTrue);
+
+      // Repaints while the composition is unchanged (cursor blink, drag)
+      // must reuse the cached paragraph instead of rebuilding a native one.
+      rt.markNeedsPaint();
+      await tester.pump();
+      rt.markNeedsPaint();
+      await tester.pump();
+      expect(rt.debugComposingParagraphBuilds, 1);
+
+      // Changing the composing text invalidates the cache.
+      rt.composingText = 'niet';
+      await tester.pump();
+      expect(rt.debugComposingParagraphBuilds, 2);
+    });
+
+    testWidgets('disposes the composing paragraph on unmount', (tester) async {
+      final terminal = Terminal();
+      final rt = await _pump(tester, terminal);
+
+      rt.composingText = 'nie';
+      await tester.pump();
+      expect(rt.debugIsComposingParagraphCached, isTrue);
+
+      await tester.pumpWidget(const SizedBox());
+
+      expect(rt.debugIsComposingParagraphCached, isFalse);
+    });
   });
 
   group('mouse input', () {

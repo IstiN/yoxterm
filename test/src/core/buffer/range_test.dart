@@ -10,7 +10,8 @@ class _SimpleRange extends BufferRange {
   BufferRange get normalized => this;
 
   @override
-  Iterable<BufferSegment> toSegments() => const [];
+  Iterable<BufferSegment> toSegments({int? firstLine, int? lastLine}) =>
+      const [];
 
   @override
   bool contains(CellOffset position) => false;

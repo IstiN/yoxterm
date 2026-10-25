@@ -35,6 +35,41 @@ void main() {
       expect(segments[2].end, 10);
     });
 
+    test('toSegments(firstLine, lastLine) clips to the visible window', () {
+      // A 10k-line selection: only the visible rows are segmented, and the
+      // boundary rows keep their partial start/end.
+      final range = BufferRangeLine(CellOffset(5, 0), CellOffset(7, 9999));
+      final segments =
+          range.toSegments(firstLine: 100, lastLine: 123).toList();
+
+      expect(segments, hasLength(24));
+      expect(segments.first.line, 100);
+      expect(segments.first.start, null);
+      expect(segments.first.end, null);
+      expect(segments.last.line, 123);
+      expect(segments.last.start, null);
+      expect(segments.last.end, null);
+    });
+
+    test('toSegments(firstLine, lastLine) handles a window outside the range',
+        () {
+      final range = BufferRangeLine(CellOffset(5, 10), CellOffset(7, 12));
+
+      expect(range.toSegments(firstLine: 0, lastLine: 5), isEmpty);
+      expect(range.toSegments(firstLine: 20, lastLine: 30), isEmpty);
+    });
+
+    test('toSegments(firstLine, lastLine) works on a reversed range', () {
+      final range = BufferRangeLine(CellOffset(7, 12), CellOffset(5, 10));
+      final segments =
+          range.toSegments(firstLine: 11, lastLine: 11).toList();
+
+      expect(segments, hasLength(1));
+      expect(segments.single.line, 11);
+      expect(segments.single.start, null);
+      expect(segments.single.end, null);
+    });
+
     test('contains() works', () {
       final range = BufferRangeLine(CellOffset(10, 10), CellOffset(10, 12));
 

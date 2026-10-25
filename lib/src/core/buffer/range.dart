@@ -21,7 +21,12 @@ abstract class BufferRange {
   BufferRange get normalized;
 
   /// Convert this range to segments of single lines.
-  Iterable<BufferSegment> toSegments();
+  ///
+  /// When [firstLine]/[lastLine] are provided, only segments whose line is
+  /// within that inclusive window are generated. This is a pre-segmentation
+  /// clip: repaints over huge selections/highlights stay proportional to the
+  /// visible rows instead of the whole selected range.
+  Iterable<BufferSegment> toSegments({int? firstLine, int? lastLine});
 
   /// Returns true if the given[position] is within this range.
   bool contains(CellOffset position);

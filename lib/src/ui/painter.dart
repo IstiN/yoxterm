@@ -45,10 +45,17 @@ class TerminalPainter {
       PlatformDispatcher.instance.implicitView?.devicePixelRatio ??
       1.0;
 
-  /// Overrides the device pixel ratio used for snapping and glyph-atlas
-  /// rasterization. Tests use this to make [_dpr] match the raster scale of
-  /// a bare `PictureRecorder` canvas (always 1.0).
-  @visibleForTesting
+  /// The device pixel ratio currently used for coordinate snapping and
+  /// glyph-atlas rasterization. Frame-recording callers compare this against
+  /// the destination canvas transform to decide atlas eligibility.
+  double get devicePixelRatio => _dpr;
+
+  /// Overrides the device pixel ratio used for coordinate snapping and
+  /// glyph-atlas rasterization. Frame recording consults this under test
+  /// bindings, which may rasterize captures at a scale the platform
+  /// dispatcher cannot report: pinning the destination's raster scale here
+  /// is what makes the glyph atlas eligible for a frame recording there.
+  /// When null, the platform dispatcher's implicit view dpr is used.
   double? debugDevicePixelRatio;
 
   /// The cached for cells in the terminal. Should be cleared when the same
@@ -224,6 +231,20 @@ class TerminalPainter {
   @visibleForTesting
   int debugGlyphScanCount = 0;
 
+  /// Number of glyph-atlas sprite batches ([Canvas.drawRawAtlas]) emitted
+  /// since this counter was last reset, across both line builds and replays.
+  /// Tests use it to assert the atlas fast path is exercised (and not just
+  /// the paragraph fallback) for a given paint path.
+  @visibleForTesting
+  int debugAtlasDrawCount = 0;
+
+  /// Number of per-run / per-cell [Canvas.drawParagraph] fallback paints
+  /// emitted since this counter was last reset, across both line builds and
+  /// replays. Tests use it to assert a paint path fell back to paragraphs
+  /// (atlas-ineligible destination) instead of using the atlas.
+  @visibleForTesting
+  int debugParagraphDrawCount = 0;
+
   /// Number of line pictures currently held by [_linePaintCache]. Tests use
   /// it to assert pictures are disposed when cache entries are invalidated.
   @visibleForTesting
@@ -369,12 +390,36 @@ class TerminalPainter {
   /// Whether the glyph atlas can serve [canvas]: the canvas transform must
   /// be axis-aligned and scale by exactly [_dpr], so dpr-snapped sprite
   /// positions map texels 1:1 onto output pixels.
-  bool _atlasUsableOn(Canvas canvas) {
+  ///
+  /// This probes the canvas's own transform, so it only answers for canvases
+  /// whose transform IS the raster transform (e.g. tests painting directly
+  /// into a canvas set up with a dpr transform). Frame recording paints into
+  /// a fresh `Canvas(PictureRecorder)` whose transform is identity, so it
+  /// must decide eligibility with [atlasUsableOnDestination] on the
+  /// destination canvas instead, and thread the result in via
+  /// [prepareLineGlyphs]/[paintLine]'s `atlasEligible` parameter.
+  bool atlasUsableOn(Canvas canvas) {
     final t = canvas.getTransform();
     return t[1] == 0 &&
         t[4] == 0 &&
         t[0] == t[5] &&
         t[0] == _dpr;
+  }
+
+  /// Whether the glyph atlas can serve painting recorded for display
+  /// through [canvas]. The destination must rasterize logical coordinates
+  /// at exactly [_dpr] physical pixels per point. The compositor applies
+  /// the view's device pixel ratio ([viewPixelRatio]) in the root layer,
+  /// and non-composited ancestor transforms accumulate on [canvas]'s own
+  /// transform, so the destination raster scale is the canvas scale times
+  /// [viewPixelRatio]. On the common paint path the canvas transform
+  /// carries no scale and this reduces to the view dpr matching [_dpr];
+  /// board zoom (an additional transform scale on the canvas) and captures
+  /// whose raster scale differs from [_dpr] keep the paragraph fallback.
+  bool atlasUsableOnDestination(Canvas canvas, double viewPixelRatio) {
+    final t = canvas.getTransform();
+    if (t[1] != 0 || t[4] != 0 || t[0] != t[5]) return false;
+    return t[0] * viewPixelRatio == _dpr;
   }
 
   /// Pre-rasterizes every mergeable glyph variant of [line] that the atlas
@@ -419,15 +464,19 @@ class TerminalPainter {
   /// first frame of styled output (a bold/italic/underline ASCII mix) pays
   /// for a single atlas re-rasterization instead of one per line.
   ///
-  /// Does nothing when the atlas cannot serve [canvas] (see
-  /// [_atlasUsableOn]); [paintLine] then uses the paragraph path as usual.
+  /// Does nothing when the atlas cannot serve the destination (see
+  /// [atlasUsableOn]); [paintLine] then uses the paragraph path as usual.
+  /// [atlasEligible] overrides the canvas-transform probe for callers
+  /// recording into a fresh `PictureRecorder` canvas whose transform is
+  /// identity but whose output destination is known (frame pictures).
   void prepareLineGlyphs(
     Canvas canvas,
     IndexAwareCircularBuffer<BufferLine> lines,
     int firstLine,
-    int lastLine,
-  ) {
-    if (!_atlasUsableOn(canvas)) return;
+    int lastLine, {
+    bool? atlasEligible,
+  }) {
+    if (!(atlasEligible ?? atlasUsableOn(canvas))) return;
     final atlas = _atlas();
     if (atlas.isFull) return;
     final missing = _atlasMissingKeys..clear();
@@ -537,18 +586,28 @@ class TerminalPainter {
   /// tiles are single-glyph paragraphs — pixel-identical to the per-cell
   /// path. Emoji, wide chars and other non-ASCII cells keep the per-cell
   /// paragraph path; box-drawing chars use primitives.
+  ///
+  /// [atlasEligible] overrides the canvas-transform probe ([atlasUsableOn])
+  /// for callers recording into a fresh `PictureRecorder` canvas whose
+  /// transform is identity but whose output destination is known: the frame
+  /// picture is recorded at DPR-snapped logical coordinates and replayed
+  /// under the destination transform, so eligibility decided on the
+  /// destination canvas applies verbatim to the recording.
   void paintLine(
     Canvas canvas,
     Offset offset,
-    BufferLine line,
-  ) {
+    BufferLine line, {
+    bool? atlasEligible,
+  }) {
     // The atlas is only usable when the canvas raster scale matches the dpr
     // the tiles are (re)built for — otherwise snapped sprite positions no
     // longer land on texel boundaries and sampling would blur compared to
     // the paragraph path. In particular widget tests capture at 1x while
     // the implicit view reports a higher dpr, and board zoom applies a
-    // scale on top of the dpr; both fall back to the paragraph path.
-    final atlas = _atlasUsableOn(canvas) ? _atlas() : null;
+    // scale on top of the dpr; both fall back to the paragraph path. Frame
+    // recording passes the destination's eligibility explicitly since the
+    // record canvas transform is identity.
+    final atlas = (atlasEligible ?? atlasUsableOn(canvas)) ? _atlas() : null;
 
     // Replay the ops recorded for this line when neither the line content
     // ([BufferLine.version]) nor the atlas configuration changed. Replay
@@ -698,6 +757,7 @@ class TerminalPainter {
             null,
             _atlasPaint,
           );
+          debugAtlasDrawCount++;
         case _TextRunOp():
           _paintTextRun(
             canvas,
@@ -750,6 +810,7 @@ class TerminalPainter {
       // Sprites only accumulate when the atlas served their tiles, so the
       // atlas and its image are non-null here.
       ops.add(_obtainSpriteBatchOp(spriteCount));
+      debugAtlasDrawCount++;
       canvas.drawRawAtlas(
         atlas!.image!,
         Float32List.sublistView(_atlasTransforms, 0, spriteCount * 4),
@@ -1028,6 +1089,7 @@ class TerminalPainter {
     }
 
     canvas.drawParagraph(paragraph, offset);
+    debugParagraphDrawCount++;
   }
 
   @pragma('vm:prefer-inline')
@@ -1105,6 +1167,7 @@ class TerminalPainter {
     }
 
     canvas.drawParagraph(paragraph, _snapOffset(offset));
+    debugParagraphDrawCount++;
   }
 
   /// Converts a Unicode code point to a Dart string, handling surrogate pairs

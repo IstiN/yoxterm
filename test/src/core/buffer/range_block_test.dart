@@ -35,6 +35,27 @@ void main() {
       expect(segments[2].end, 12);
     });
 
+    test('toSegments(firstLine, lastLine) clips to the visible window', () {
+      // A 10k-line block: only the visible rows are segmented.
+      final range = BufferRangeBlock(CellOffset(5, 0), CellOffset(7, 9999));
+      final segments =
+          range.toSegments(firstLine: 100, lastLine: 123).toList();
+
+      expect(segments, hasLength(24));
+      expect(segments.first.line, 100);
+      expect(segments.first.start, 5);
+      expect(segments.first.end, 7);
+      expect(segments.last.line, 123);
+    });
+
+    test('toSegments(firstLine, lastLine) handles a window outside the range',
+        () {
+      final range = BufferRangeBlock(CellOffset(5, 10), CellOffset(7, 12));
+
+      expect(range.toSegments(firstLine: 0, lastLine: 5), isEmpty);
+      expect(range.toSegments(firstLine: 20, lastLine: 30), isEmpty);
+    });
+
     test('contains() works', () {
       final range = BufferRangeBlock(CellOffset(10, 10), CellOffset(10, 12));
 

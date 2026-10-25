@@ -1,6 +1,13 @@
 import 'package:test/test.dart';
 import 'package:yoxterm/xterm.dart';
 
+/// Writes [text] (ASCII only) into [line] starting at cell 0.
+void writeAscii(BufferLine line, String text) {
+  for (var i = 0; i < text.length; i++) {
+    line.setCodePoint(i, text.codeUnitAt(i));
+  }
+}
+
 void main() {
   group('BufferLine.getText()', () {
     test('should return the text', () {
@@ -101,6 +108,47 @@ void main() {
       line.resize(20);
 
       expect(line.length, equals(20));
+    });
+
+    test('growth reallocates the backing store', () {
+      final line = BufferLine(80);
+      final initialCapacity = line.data.length;
+
+      line.resize(300);
+
+      expect(line.data.length, greaterThan(initialCapacity));
+      expect(line.length, 300);
+    });
+
+    test('shrink releases the high-water allocation when it greatly exceeds the new requirement', () {
+      // _calcCapacity(1000) == 1024 cells.
+      final line = BufferLine(1000);
+      writeAscii(line, 'ABCDEF');
+      final highWaterCapacity = line.data.length;
+
+      // _calcCapacity(80) == 128 cells; 1024 > 2 * 128, so the store shrinks.
+      line.resize(80);
+
+      expect(line.length, 80);
+      expect(line.data.length, lessThan(highWaterCapacity));
+      // Content survives the reallocation.
+      expect(line.getText(), 'ABCDEF');
+    });
+
+    test('shrink keeps the allocation within the hysteresis band', () {
+      // _calcCapacity(300) == 320 cells.
+      final line = BufferLine(300);
+      writeAscii(line, 'ABCDEF');
+      final capacity = line.data.length;
+
+      // _calcCapacity(280) == 320 cells; capacity does not exceed 2x the new
+      // requirement, so no reallocation happens (avoids churn during
+      // interactive resizes).
+      line.resize(280);
+
+      expect(line.length, 280);
+      expect(line.data.length, capacity);
+      expect(line.getText(), 'ABCDEF');
     });
   });
 

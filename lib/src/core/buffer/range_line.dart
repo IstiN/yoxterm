@@ -13,9 +13,20 @@ class BufferRangeLine extends BufferRange {
   }
 
   @override
-  Iterable<BufferSegment> toSegments() sync* {
+  Iterable<BufferSegment> toSegments({int? firstLine, int? lastLine}) sync* {
     final self = normalized;
-    for (var i = self.begin.y; i <= self.end.y; i++) {
+    var startLine = self.begin.y;
+    var endLine = self.end.y;
+    if (firstLine != null && startLine < firstLine) {
+      startLine = firstLine;
+    }
+    if (lastLine != null && endLine > lastLine) {
+      endLine = lastLine;
+    }
+    if (startLine > endLine) {
+      return;
+    }
+    for (var i = startLine; i <= endLine; i++) {
       var startX = i == self.begin.y ? self.begin.x : null;
       var endX = i == self.end.y ? self.end.x : null;
       yield BufferSegment(this, i, startX, endX);

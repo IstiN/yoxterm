@@ -276,6 +276,12 @@ class BufferLine with IndexedItem {
     version++;
   }
 
+  /// Hysteresis factor for downward reallocation in [resize]: the backing
+  /// store is only shrunk when the current capacity exceeds
+  /// [_shrinkHysteresis] times the new requirement, so interactive resizes
+  /// do not churn through a reallocation on every step.
+  static const _shrinkHysteresis = 2;
+
   void resize(int length) {
     assert(length >= 0);
 
@@ -283,14 +289,20 @@ class BufferLine with IndexedItem {
       return;
     }
 
-    if (length > _length) {
-      final newBufferSize = _calcCapacity(length) * _cellSize;
+    final currentCapacity = _data.length ~/ _cellSize;
+    final newCapacity = _calcCapacity(length);
 
-      if (newBufferSize > _data.length) {
-        final newBuffer = Uint32List(newBufferSize);
-        newBuffer.setRange(0, _data.length, _data);
-        _data = newBuffer;
-      }
+    if (newCapacity > currentCapacity) {
+      final newBuffer = Uint32List(newCapacity * _cellSize);
+      newBuffer.setRange(0, _data.length, _data);
+      _data = newBuffer;
+    } else if (currentCapacity > newCapacity * _shrinkHysteresis) {
+      // Capacity greatly exceeds the new requirement (e.g. after a wide
+      // resize narrowed again): release the high-water allocation so the
+      // line stops pinning memory it no longer needs.
+      final newBuffer = Uint32List(newCapacity * _cellSize);
+      newBuffer.setRange(0, newBuffer.length, _data);
+      _data = newBuffer;
     }
 
     _length = length;

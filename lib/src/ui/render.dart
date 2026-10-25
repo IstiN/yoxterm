@@ -96,11 +96,32 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// once to refresh the painter's per-line cache.
   bool _framePictureDirty = true;
 
+  /// The glyph-atlas eligibility and device pixel ratio the current
+  /// [_framePicture] was recorded for. The frame records into a fresh
+  /// `PictureRecorder` canvas whose transform is identity, so eligibility is
+  /// decided on the destination canvas at paint time and baked into the
+  /// picture; when either value changes (board zoom on/off, dpr change) the
+  /// cached picture no longer matches how the destination would rasterize it
+  /// and must be re-recorded.
+  bool _framePictureAtlasUsable = false;
+  double _framePictureDpr = 1.0;
+
   /// Monotonic counters for tests (see render_frame_picture_test.dart).
   @visibleForTesting
   int debugFramePictureRebuilds = 0;
   @visibleForTesting
   int debugFramePictureHits = 0;
+
+  /// Number of selection/highlight segments built during paints since the
+  /// last [debugResetPaintCounter]. Exposed so tests can assert that
+  /// repainting a huge selection only segments the visible rows.
+  @visibleForTesting
+  int debugOverlaySegmentBuilds = 0;
+
+  /// Whether a composing paragraph is currently cached. Exposed so disposal
+  /// tests can assert the native [Paragraph] is released on detach/dispose.
+  @visibleForTesting
+  bool get debugIsComposingParagraphCached => _composingParagraph != null;
 
   /// Cumulative number of [paint] calls since the last
   /// [debugResetPaintCounter]. Exposed so throttle coalescing tests can
@@ -125,6 +146,12 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   /// disposal tests can assert [dispose] released the painter's caches.
   @visibleForTesting
   bool get debugIsPainterDisposed => _painter.debugIsDisposed;
+
+  /// The painter backing this render object. Exposed so tests can read its
+  /// debug draw counters (atlas sprite batches vs paragraph fallback paints)
+  /// to assert which paint path a frame recording exercised.
+  @visibleForTesting
+  TerminalPainter get debugPainter => _painter;
 
   /// Number of scrollback lines above which main-buffer resizes are debounced.
   static const _largeScrollbackThreshold = 100;
@@ -242,6 +269,23 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     _inputConnectionOpen = value;
   }
 
+  /// Caches the last laid-out composing paragraph so repaints while the IME
+  /// composition is unchanged (cursor blink, selection drags) reuse it
+  /// instead of rebuilding and re-laying out a native [Paragraph] each
+  /// frame. Invalidated when the composing text, resolved style, text
+  /// scaler or layout width change; disposed on replace and on
+  /// detach/dispose.
+  Paragraph? _composingParagraph;
+  String? _composingParagraphText;
+  TextStyle? _composingParagraphStyle;
+  TextScaler? _composingParagraphTextScaler;
+  double? _composingParagraphWidth;
+
+  /// Number of composing paragraphs built since attach. Exposed so tests
+  /// can assert the cache is hit across repaints while composing.
+  @visibleForTesting
+  int debugComposingParagraphBuilds = 0;
+
   String? _composingText;
   set composingText(String? value) {
     if (value == _composingText) return;
@@ -349,6 +393,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     _altResizeDebounce = null;
     _framePicture?.dispose();
     _framePicture = null;
+    _disposeComposingParagraph();
     _offset.removeListener(_onScroll);
     _terminal.removeListener(_onTerminalChange);
     _controller.removeListener(_onControllerUpdate);
@@ -366,7 +411,18 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     // render object can be disposed without ever being detached.
     _framePicture?.dispose();
     _framePicture = null;
+    _disposeComposingParagraph();
     super.dispose();
+  }
+
+  /// Drops the cached composing paragraph (a native resource). Idempotent.
+  void _disposeComposingParagraph() {
+    _composingParagraph?.dispose();
+    _composingParagraph = null;
+    _composingParagraphText = null;
+    _composingParagraphStyle = null;
+    _composingParagraphTextScaler = null;
+    _composingParagraphWidth = null;
   }
 
   @override
@@ -699,8 +755,39 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     // The picture records at [Offset.zero]; the replay translates it to the
     // current paint offset, so a parent repositioning this render object
     // (board switch) is a pure translate — no re-record, no stale geometry.
+    //
+    // The record canvas has an identity transform, so [TerminalPainter]'s
+    // canvas probe cannot see the destination raster scale. The compositor
+    // applies the view's dpr in the root layer and any board zoom accumulates
+    // on this canvas's transform, so decide atlas eligibility on the
+    // destination canvas (its scale times the view dpr must equal the
+    // painter's dpr) and thread it into the recording pass; the picture
+    // replays under the destination transform, so dpr-snapped sprite
+    // coordinates recorded here land on texel boundaries there. Board zoom
+    // (transform scale != 1 on top of the dpr) keeps the paragraph fallback,
+    // and a change of either value invalidates a previously recorded
+    // picture.
+    //
+    // A test binding swaps in its own PlatformDispatcher and may rasterize
+    // golden captures at 1x regardless of the view dpr (captureImage
+    // rasterizes the repaint-boundary layer at pixelRatio 1.0), where
+    // dpr-scaled sprites would render shrunken. So under a test binding the
+    // destination probe is only trusted when the painter's dpr is pinned
+    // explicitly — which is also the documented purpose of
+    // [TerminalPainter.debugDevicePixelRatio].
+    final viewDpr = RendererBinding
+            .instance.platformDispatcher.implicitView?.devicePixelRatio ??
+        1.0;
+    final testBinding = !identical(PlatformDispatcher.instance,
+        RendererBinding.instance.platformDispatcher);
+    final atlasUsable = _painter.atlasUsableOnDestination(canvas, viewDpr) &&
+        (!testBinding || _painter.debugDevicePixelRatio != null);
+    final frameDpr = _painter.devicePixelRatio;
     final framePicture = _framePicture;
-    if (_framePictureDirty || framePicture == null) {
+    if (_framePictureDirty ||
+        framePicture == null ||
+        _framePictureAtlasUsable != atlasUsable ||
+        _framePictureDpr != frameDpr) {
       _framePicture?.dispose();
       final recorder = PictureRecorder();
       final recordCanvas = Canvas(recorder);
@@ -714,15 +801,19 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       // Collect missing glyphs across all visible lines and rebuild the
       // atlas at most once, before any line references the new tiles.
       _painter.prepareLineGlyphs(
-          recordCanvas, lines, effectFirstLine, effectLastLine);
+          recordCanvas, lines, effectFirstLine, effectLastLine,
+          atlasEligible: atlasUsable);
       for (var i = effectFirstLine; i <= effectLastLine; i++) {
         _painter.paintLine(
           recordCanvas,
           Offset(0, i * charHeight + _lineOffset),
           lines[i],
+          atlasEligible: atlasUsable,
         );
       }
       _framePicture = recorder.endRecording();
+      _framePictureAtlasUsable = atlasUsable;
+      _framePictureDpr = frameDpr;
       _framePictureDirty = false;
       debugFramePictureRebuilds++;
     } else {
@@ -790,19 +881,37 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       underline: true,
     );
 
-    final builder = ParagraphBuilder(style.getParagraphStyle());
-    builder.addPlaceholder(
-      offset.dx,
-      _painter.cellSize.height,
-      PlaceholderAlignment.middle,
-    );
-    builder.pushStyle(
-      style.getTextStyle(textScaler: _painter.textScaler),
-    );
-    builder.addText(composingText);
+    final width = size.width;
 
-    final paragraph = builder.build();
-    paragraph.layout(ParagraphConstraints(width: size.width));
+    var paragraph = _composingParagraph;
+    if (paragraph == null ||
+        _composingParagraphText != composingText ||
+        _composingParagraphStyle != style ||
+        _composingParagraphTextScaler != _painter.textScaler ||
+        _composingParagraphWidth != width) {
+      paragraph?.dispose();
+
+      final builder = ParagraphBuilder(style.getParagraphStyle());
+      builder.addPlaceholder(
+        offset.dx,
+        _painter.cellSize.height,
+        PlaceholderAlignment.middle,
+      );
+      builder.pushStyle(
+        style.getTextStyle(textScaler: _painter.textScaler),
+      );
+      builder.addText(composingText);
+
+      paragraph = builder.build();
+      paragraph.layout(ParagraphConstraints(width: width));
+
+      _composingParagraph = paragraph;
+      _composingParagraphText = composingText;
+      _composingParagraphStyle = style;
+      _composingParagraphTextScaler = _painter.textScaler;
+      _composingParagraphWidth = width;
+      debugComposingParagraphBuilds++;
+    }
 
     canvas.drawParagraph(paragraph, Offset(0, offset.dy));
   }
@@ -813,19 +922,15 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     int firstLine,
     int lastLine,
   ) {
-    for (final segment in selection.toSegments()) {
+    // Clip to the visible window before segmentation so a repaint over a
+    // huge selection only builds segments for visible rows.
+    for (final segment
+        in selection.toSegments(firstLine: firstLine, lastLine: lastLine)) {
       if (segment.line >= _terminal.buffer.lines.length) {
         break;
       }
 
-      if (segment.line < firstLine) {
-        continue;
-      }
-
-      if (segment.line > lastLine) {
-        break;
-      }
-
+      debugOverlaySegmentBuilds++;
       _paintSegment(canvas, segment, _painter.theme.selection);
     }
   }
@@ -845,15 +950,15 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         continue;
       }
 
-      for (var segment in range.toSegments()) {
-        if (segment.line < firstLine) {
-          continue;
-        }
-
-        if (segment.line > lastLine) {
+      // Clip to the visible window before segmentation so a repaint over a
+      // huge highlight only builds segments for visible rows.
+      for (var segment
+          in range.toSegments(firstLine: firstLine, lastLine: lastLine)) {
+        if (segment.line >= _terminal.buffer.lines.length) {
           break;
         }
 
+        debugOverlaySegmentBuilds++;
         _paintSegment(canvas, segment, highlight.color);
       }
     }

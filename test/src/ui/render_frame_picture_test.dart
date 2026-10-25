@@ -168,6 +168,78 @@ void main() {
         reason: 'RenderTerminal.dispose must release the TerminalPainter '
             '(line pictures, glyph atlas, paragraph cache)');
   });
+
+  group('glyph atlas eligibility in frame recording', () {
+    testWidgets(
+        'a DPR=2 destination paints the composed frame through the glyph '
+        'atlas', (tester) async {
+      final terminal = Terminal();
+      terminal.write('plain ascii line one\r\nplain ascii line two');
+      // A DPR=2 view: the compositor's root layer rasterizes the frame
+      // picture at 2x. Pin the painter's atlas dpr to the same value (its
+      // default source is the platform implicit view, which tests report
+      // independently of tester.view) — in production both read the same
+      // view, so a real DPR=2 destination implies a matching painter dpr.
+      tester.view.devicePixelRatio = 2.0;
+      tester.view.physicalSize = const Size(160, 800); // 800x400 logical
+      addTearDown(tester.view.reset);
+      final ro = await pumpTerminal(tester, terminal);
+      final painter = ro.debugPainter
+        ..debugDevicePixelRatio = 2.0
+        ..debugAtlasDrawCount = 0
+        ..debugParagraphDrawCount = 0;
+      final rebuilds = ro.debugFramePictureRebuilds;
+
+      // The painter dpr change alone must invalidate the frame recorded
+      // during the initial paint, and the re-record — which happens into an
+      // identity-transform recorder canvas — must still take the atlas
+      // sprite-batch path.
+      ro.markNeedsPaint();
+      await tester.pump();
+
+      expect(ro.debugFramePictureRebuilds, rebuilds + 1,
+          reason: 'a changed painter dpr invalidates the recorded frame '
+              'picture');
+      expect(painter.debugAtlasDrawCount, greaterThan(0),
+          reason: 'at DPR=2 the composed frame must batch text through the '
+              'glyph atlas, not the paragraph fallback');
+      expect(painter.debugParagraphDrawCount, 0,
+          reason: 'pure printable-ASCII lines have no cell the atlas cannot '
+              'serve, so no paragraph paint may be emitted');
+    });
+
+    testWidgets(
+        'a destination raster scale different from the painter dpr keeps '
+        'the paragraph fallback', (tester) async {
+      final terminal = Terminal();
+      terminal.write('plain ascii line one\r\nplain ascii line two');
+      tester.view.devicePixelRatio = 3.0;
+      tester.view.physicalSize = const Size(2400, 1800); // 800x600 logical
+      addTearDown(tester.view.reset);
+      final ro = await pumpTerminal(tester, terminal);
+      final painter = ro.debugPainter
+        // Simulate a capture whose raster scale does not match the atlas
+        // dpr (the widget-test capture case: the painter was set up for a
+        // 2x destination but the view still rasterizes at 3x).
+        ..debugDevicePixelRatio = 2.0
+        ..debugAtlasDrawCount = 0
+        ..debugParagraphDrawCount = 0;
+      final rebuilds = ro.debugFramePictureRebuilds;
+
+      terminal.write('!');
+      await tester.pump();
+
+      expect(ro.debugFramePictureRebuilds, rebuilds + 1,
+          reason: 'a changed painter dpr invalidates the recorded frame '
+              'picture');
+      expect(painter.debugParagraphDrawCount, greaterThan(0),
+          reason: 'when the destination raster scale != atlas dpr, the frame '
+              'must fall back to merged text-run paragraphs');
+      expect(painter.debugAtlasDrawCount, 0,
+          reason: 'no sprite batch may be emitted for an ineligible '
+              'destination');
+    });
+  });
 }
 
 /// A [PaintingContext] whose canvas is the mock, so direct `ro.paint(...)`
