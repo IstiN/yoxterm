@@ -334,6 +334,87 @@ void main() {
       expect(cl[4], 9.indexed);
     });
 
+    test("trim start detaches trimmed elements", () {
+      final cl = IndexAwareCircularBuffer<IndexedValue<int>>(10);
+      final items = List<int>.generate(10, (index) => index)
+          .map(IndexedValue.new)
+          .toList();
+      cl.pushAll(items);
+
+      cl.trimStart(4);
+
+      // Trimmed slots are nulled and their elements detached, so they (and
+      // any memory they own) are released immediately instead of lingering
+      // in the backing array until overwritten.
+      for (var i = 0; i < 4; i++) {
+        expect(items[i].attached, isFalse);
+      }
+      // Survivors keep their order.
+      expect(cl.length, 6);
+      for (var i = 4; i < 10; i++) {
+        expect(cl[i - 4], same(items[i]));
+        expect(items[i].attached, isTrue);
+      }
+    });
+
+    test("trim start keeps the survivors' indexes consistent", () {
+      final cl = IndexAwareCircularBuffer<IndexedValue<int>>(10);
+      final items = List<int>.generate(10, (index) => index)
+          .map(IndexedValue.new)
+          .toList();
+      cl.pushAll(items);
+
+      cl.trimStart(4);
+
+      for (var i = 4; i < 10; i++) {
+        expect(items[i].index, i - 4);
+      }
+    });
+
+    test("trim start clears slots across the wraparound point", () {
+      final cl = IndexAwareCircularBuffer<IndexedValue<int>>(10);
+      // 15 pushes wrap the start index to 5.
+      final items = List<int>.generate(15, (index) => index)
+          .map(IndexedValue.new)
+          .toList();
+      cl.pushAll(items);
+      expect(cl[0], same(items[5]));
+
+      cl.trimStart(7);
+
+      expect(cl.length, 3);
+      for (var i = 5; i < 12; i++) {
+        expect(items[i].attached, isFalse);
+      }
+      expect(cl[0], same(items[12]));
+      expect(cl[2], same(items[14]));
+      for (var i = 12; i < 15; i++) {
+        expect(items[i].index, i - 12);
+      }
+
+      // New pushes reuse the nulled slots instead of retaining stale
+      // references.
+      final extra = IndexedValue(100);
+      cl.push(extra);
+      expect(cl[3], same(extra));
+      expect(extra.index, 3);
+    });
+
+    test("trim start with more than length detaches everything", () {
+      final cl = IndexAwareCircularBuffer<IndexedValue<int>>(10);
+      final items = List<int>.generate(10, (index) => index)
+          .map(IndexedValue.new)
+          .toList();
+      cl.pushAll(items);
+
+      cl.trimStart(15);
+
+      expect(cl.length, 0);
+      for (final item in items) {
+        expect(item.attached, isFalse);
+      }
+    });
+
     test("trim start with more than length works", () {
       final cl = IndexAwareCircularBuffer<IndexedValue<int>>(10);
       cl.pushAll(

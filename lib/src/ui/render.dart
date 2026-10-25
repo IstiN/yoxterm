@@ -121,6 +121,11 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
   @visibleForTesting
   Duration get debugMinOutputPaintInterval => _minOutputPaintInterval;
 
+  /// Whether the owned [TerminalPainter] has been disposed. Exposed so
+  /// disposal tests can assert [dispose] released the painter's caches.
+  @visibleForTesting
+  bool get debugIsPainterDisposed => _painter.debugIsDisposed;
+
   /// Number of scrollback lines above which main-buffer resizes are debounced.
   static const _largeScrollbackThreshold = 100;
 
@@ -348,6 +353,20 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     _terminal.removeListener(_onTerminalChange);
     _controller.removeListener(_onControllerUpdate);
     _focusNode.removeListener(_onFocusChange);
+  }
+
+  @override
+  void dispose() {
+    _altResizeDebounce?.cancel();
+    _altResizeDebounce = null;
+    // Releases the painter's cached line pictures, glyph atlas and paragraph
+    // cache. Idempotent, and RenderTerminal is never painted afterwards.
+    _painter.dispose();
+    // Defensive: [detach] normally drops the frame picture already, but a
+    // render object can be disposed without ever being detached.
+    _framePicture?.dispose();
+    _framePicture = null;
+    super.dispose();
   }
 
   @override

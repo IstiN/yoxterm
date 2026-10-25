@@ -239,8 +239,17 @@ class IndexAwareCircularBuffer<T extends IndexedItem> {
   /// instead just adjusts the start index and length.
   void trimStart(int count) {
     if (count > _length) count = _length;
-    _startIndex += count;
-    _startIndex %= _array.length;
+    // Null out the trimmed slots (detaching the elements) so they — and any
+    // memory they own — become unreachable immediately instead of lingering
+    // in the backing array until overwritten.
+    for (var i = 0; i < count; i++) {
+      _dropChild(i);
+    }
+    _startIndex = (_startIndex + count) % _array.length;
+    // Remaining elements keep their absolute index, so the start of the
+    // absolute index space moves with the trim to keep [IndexedItem.index]
+    // consistent (mirrors the trimming in [push] and [insert]).
+    _absoluteStartIndex += count;
     _length -= count;
   }
 

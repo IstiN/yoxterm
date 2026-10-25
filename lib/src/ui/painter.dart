@@ -230,6 +230,16 @@ class TerminalPainter {
   int get debugLivePictureCount => _livePictureCount;
   int _livePictureCount = 0;
 
+  /// Number of paragraphs currently held by the paragraph layout cache.
+  /// Tests use it to assert [dispose] releases the cache.
+  @visibleForTesting
+  int get debugCachedParagraphCount => _paragraphCache.length;
+
+  /// Whether the glyph atlas currently holds rasterized tiles. Tests use it
+  /// to assert [dispose] releases the atlas.
+  @visibleForTesting
+  bool get debugHasGlyphAtlas => _glyphAtlas != null;
+
   /// Number of times the current glyph atlas re-rasterized its image. Tests
   /// use it to assert frame-wide glyph discovery ([prepareLineGlyphs])
   /// batches into a single rebuild.
@@ -319,6 +329,26 @@ class TerminalPainter {
     _glyphAtlas = null;
     // Recorded sprite ops reference atlas tiles, so the replay cache must go.
     _clearLinePaintCache();
+  }
+
+  /// Whether [dispose] has already run.
+  var _disposed = false;
+
+  /// Whether this painter has been disposed. Read by the owning render
+  /// object (and tests) to verify resource release.
+  bool get debugIsDisposed => _disposed;
+
+  /// Releases every native resource held by the painter: cached line
+  /// pictures, the glyph atlas image and its paragraphs, and the paragraph
+  /// layout cache. Idempotent — a second call is a no-op. The painter must
+  /// not be used after disposal.
+  void dispose() {
+    if (_disposed) return;
+    _disposed = true;
+    _clearLinePaintCache();
+    _glyphAtlas?.disposeAndClear();
+    _glyphAtlas = null;
+    _paragraphCache.dispose();
   }
 
   /// Returns the atlas for the current configuration, creating it on first

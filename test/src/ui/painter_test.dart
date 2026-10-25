@@ -512,4 +512,58 @@ void main() {
       expect(canvas.paragraphs, 1);
     });
   });
+
+  group('dispose', () {
+    test('releases line pictures, glyph atlas and paragraph cache', () {
+      final painter = _painter();
+      final terminal = Terminal();
+      for (var i = 0; i < 4; i++) {
+        terminal.write('plain line $i: the quick brown fox\n');
+      }
+      // Atlas-usable pass: populates the glyph atlas, the per-line replay
+      // cache and its pictures.
+      final atlasCanvas = _RecordingCanvas();
+      for (var i = 0; i < terminal.buffer.lines.length; i++) {
+        painter.paintLine(
+          atlasCanvas,
+          Offset(0, i * painter.cellSize.height),
+          terminal.buffer.lines[i],
+        );
+      }
+      expect(painter.debugLivePictureCount, greaterThan(0));
+      expect(painter.debugHasGlyphAtlas, isTrue);
+      expect(painter.debugCachedParagraphCount, 0);
+
+      // Atlas-unusable pass (raster scale mismatch): mergeable cells take
+      // the merged text-run path and populate the paragraph cache.
+      final paragraphCanvas = _RecordingCanvas(scale: 2.0);
+      for (var i = 0; i < terminal.buffer.lines.length; i++) {
+        painter.paintLine(
+          paragraphCanvas,
+          Offset(0, i * painter.cellSize.height),
+          terminal.buffer.lines[i],
+        );
+      }
+      expect(painter.debugCachedParagraphCount, greaterThan(0));
+
+      painter.dispose();
+
+      expect(painter.debugIsDisposed, isTrue);
+      expect(painter.debugLivePictureCount, 0);
+      expect(painter.debugHasGlyphAtlas, isFalse);
+      expect(painter.debugCachedParagraphCount, 0);
+    });
+
+    test('second dispose is a no-op', () {
+      final painter = _painter();
+      _paintText(painter, 'hello');
+
+      painter.dispose();
+      expect(painter.debugLivePictureCount, 0);
+
+      expect(() => painter.dispose(), returnsNormally);
+      expect(painter.debugLivePictureCount, 0);
+      expect(painter.debugIsDisposed, isTrue);
+    });
+  });
 }

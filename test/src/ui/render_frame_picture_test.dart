@@ -154,6 +154,20 @@ void main() {
     expect(pictureIndex, greaterThan(translateIndex),
         reason: 'drawPicture must happen after the translation');
   });
+
+  testWidgets('unmounting the view disposes the painter resources',
+      (tester) async {
+    final terminal = Terminal();
+    terminal.write('hello frame picture\nworld');
+    final ro = await pumpTerminal(tester, terminal);
+    expect(ro.debugIsPainterDisposed, isFalse);
+
+    await tester.pumpWidget(const SizedBox());
+
+    expect(ro.debugIsPainterDisposed, isTrue,
+        reason: 'RenderTerminal.dispose must release the TerminalPainter '
+            '(line pictures, glyph atlas, paragraph cache)');
+  });
 }
 
 /// A [PaintingContext] whose canvas is the mock, so direct `ro.paint(...)`

@@ -15,6 +15,23 @@ import 'package:yoxterm/src/utils/lookup_table.dart';
 ///    parsed incrementally. The partially parsed state is kept between calls,
 ///    so the completed prefix is never rolled back and re-parsed.
 class EscapeParser {
+  /// Upper bound on the accumulated body of a single CSI sequence (bytes
+  /// between `ESC [` and the final byte). Realistic sequences are far
+  /// shorter — even a pathological SGR with dozens of 256-color pairs stays
+  /// under 500 bytes — so 1 KiB leaves wide headroom while a hostile PTY
+  /// stream omitting the final byte can no longer grow the parameter list
+  /// without bound. On overflow the sequence is discarded: bytes are
+  /// swallowed until the final byte and the payload is never dispatched.
+  static const maxCsiLength = 1024;
+
+  /// Upper bound on the accumulated body of a single OSC sequence (bytes
+  /// between `ESC ]` and BEL/ST). Window titles, icon names and hyperlink
+  /// URIs are at most a few hundred bytes; 4 KiB (xterm's classic input
+  /// buffer size) covers them with margin. On overflow the sequence is
+  /// discarded: bytes are swallowed until BEL or ST and the payload is
+  /// never dispatched.
+  static const maxOscLength = 4096;
+
   final EscapeHandler handler;
 
   EscapeParser(this.handler)
@@ -125,12 +142,29 @@ class EscapeParser {
           _processEscapeChar(_queue.consume());
           break;
         case _ParserState.csi:
-          if (!_processCsiState()) return;
+          if (!_processCsiState()) {
+            // The length limit may have been hit, switching the parser to
+            // the discard state; keep looping so the tail is swallowed in
+            // this same call.
+            if (_state != _ParserState.csiDiscard) return;
+          }
           break;
         case _ParserState.osc:
-          if (!_consumeOsc()) return;
+          if (!_consumeOsc()) {
+            // Same as above: overflow switches to the discard state.
+            if (_state != _ParserState.oscDiscard) return;
+            break;
+          }
           _finishSequence();
           _dispatchOsc();
+          break;
+        case _ParserState.csiDiscard:
+          if (!_discardCsi()) return;
+          _finishSequence();
+          break;
+        case _ParserState.oscDiscard:
+          if (!_discardOsc()) return;
+          _finishSequence();
           break;
         case _ParserState.charset0:
           if (_queue.isEmpty) return;
@@ -313,6 +347,7 @@ class EscapeParser {
     _csiPrefixParsed = false;
     _csiParam = 0;
     _csiHasParam = false;
+    _csiBytes = 0;
     _state = _ParserState.csi;
   }
 
@@ -331,6 +366,11 @@ class EscapeParser {
   /// Whether any digit of the current parameter has been seen. Deliberately
   /// not reset on `;`: once true, empty parameters are flushed as implicit 0.
   var _csiHasParam = false;
+
+  /// Number of bytes accumulated for the CSI currently being parsed.
+  /// Kept inline (not derived from the queue) so the limit check costs one
+  /// increment per byte and no allocation.
+  var _csiBytes = 0;
 
   /// Continues the CSI at the head of the queue and dispatches it when
   /// complete. Returns false — leaving the parser in the csi state — when
@@ -367,6 +407,13 @@ class EscapeParser {
       _csiPrefixParsed = true;
       final prefix = _queue.peek();
       if (prefix >= Ascii.colon && prefix <= Ascii.questionMark) {
+        if (++_csiBytes > maxCsiLength) {
+          // Give up on this sequence: drop what was accumulated and
+          // swallow the tail until the final byte.
+          _csi.params.clear();
+          _state = _ParserState.csiDiscard;
+          return false;
+        }
         _csi.prefix = prefix;
         _queue.consume();
       }
@@ -379,6 +426,25 @@ class EscapeParser {
       }
 
       final char = _queue.consume();
+
+      if (char >= Ascii.atSign && char <= Ascii.tilde) {
+        // The final byte completes the sequence even at the length limit;
+        // it is never part of the accumulated payload.
+        if (_csiHasParam) {
+          _csi.params.add(_csiParam);
+        }
+
+        _csi.finalByte = char;
+        return true;
+      }
+
+      if (++_csiBytes > maxCsiLength) {
+        // Give up on this sequence: drop what was accumulated and swallow
+        // the tail until the final byte.
+        _csi.params.clear();
+        _state = _ParserState.csiDiscard;
+        return false;
+      }
 
       if (char == Ascii.semicolon) {
         if (_csiHasParam) {
@@ -400,12 +466,22 @@ class EscapeParser {
         continue;
       }
 
-      if (char >= Ascii.atSign && char <= Ascii.tilde) {
-        if (_csiHasParam) {
-          _csi.params.add(_csiParam);
-        }
+      // Anything else (e.g. DEL or C1 controls) is ignored, mirroring the
+      // behavior before the length limit existed.
+    }
+  }
 
-        _csi.finalByte = char;
+  /// Swallows the tail of a CSI that exceeded [maxCsiLength], discarding
+  /// the accumulated payload. Returns false when more input is needed.
+  bool _discardCsi() {
+    while (true) {
+      if (_queue.isEmpty) {
+        return false;
+      }
+
+      final char = _queue.consume();
+
+      if (char >= Ascii.atSign && char <= Ascii.tilde) {
         return true;
       }
     }
@@ -1225,6 +1301,7 @@ class EscapeParser {
     _osc.clear();
     _oscParam.clear();
     _oscSawEsc = false;
+    _oscBytes = 0;
     _state = _ParserState.osc;
   }
 
@@ -1265,6 +1342,15 @@ class EscapeParser {
   /// Whether the last consumed character was an ESC, which may turn out to be
   /// the ST terminator if a backslash follows.
   var _oscSawEsc = false;
+
+  /// Number of bytes accumulated for the OSC currently being parsed. Kept
+  /// inline (not derived from the queue) so the limit check costs one
+  /// increment per byte and no allocation.
+  var _oscBytes = 0;
+
+  /// Whether the last consumed character was an ESC while discarding an
+  /// over-long OSC; a backslash then terminates the ST.
+  var _oscDiscardSawEsc = false;
 
   /// Consumes more of the OSC at the head of the queue, continuing where the
   /// previous chunk left off. Returns false if the OSC isn't terminated yet;
@@ -1309,6 +1395,16 @@ class EscapeParser {
         continue;
       }
 
+      if (++_oscBytes > maxOscLength) {
+        // Give up on this sequence: drop what was accumulated and swallow
+        // the tail until BEL or ST.
+        _osc.clear();
+        _oscParam.clear();
+        _oscDiscardSawEsc = false;
+        _state = _ParserState.oscDiscard;
+        return false;
+      }
+
       /// Parse next parameter
       if (char == Ascii.semicolon) {
         _flushOscParam();
@@ -1316,6 +1412,45 @@ class EscapeParser {
       }
 
       _oscParam.writeCharCode(char);
+    }
+  }
+
+  /// Swallows the tail of an OSC that exceeded [maxOscLength], discarding
+  /// the accumulated payload. Returns false when more input is needed.
+  bool _discardOsc() {
+    while (true) {
+      if (_oscDiscardSawEsc) {
+        if (_queue.isEmpty) {
+          return false;
+        }
+        _oscDiscardSawEsc = false;
+
+        /// ST terminates the OSC.
+        if (_queue.consume() == Ascii.backslash) {
+          return true;
+        }
+
+        // ESC followed by anything else still terminates the OSC, mirroring
+        // [_consumeOsc]. Push the character back so it is re-processed as
+        // regular input.
+        _queue.rollback();
+        return true;
+      }
+
+      if (_queue.isEmpty) {
+        return false;
+      }
+
+      final char = _queue.consume();
+
+      // OSC terminates with BEL
+      if (char == Ascii.BEL) {
+        return true;
+      }
+
+      if (char == Ascii.ESC) {
+        _oscDiscardSawEsc = true;
+      }
     }
   }
 
@@ -1341,6 +1476,14 @@ enum _ParserState {
 
   /// Inside an OSC sequence; [EscapeParser._osc] holds the parsed params.
   osc,
+
+  /// Inside a CSI that exceeded [EscapeParser.maxCsiLength]; bytes are
+  /// swallowed until the final byte and the payload is discarded.
+  csiDiscard,
+
+  /// Inside an OSC that exceeded [EscapeParser.maxOscLength]; bytes are
+  /// swallowed until BEL or ST and the payload is discarded.
+  oscDiscard,
 
   /// `ESC (` was consumed; the next character designates the G0 charset.
   charset0,
