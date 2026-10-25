@@ -49,6 +49,7 @@ class TerminalView extends StatefulWidget {
     this.readOnly = false,
     this.hardwareKeyboardOnly = false,
     this.simulateScroll = true,
+    this.snapToBottomOnAttach = true,
   });
 
   /// The underlying terminal that this widget renders.
@@ -141,6 +142,16 @@ class TerminalView extends StatefulWidget {
   /// keys to the application. This is standard behavior for most terminal
   /// emulators. True by default.
   final bool simulateScroll;
+
+  /// Whether the first layout after this widget attaches should force the
+  /// viewport to the bottom of the scrollback. [true] by default, which
+  /// follows output from the first frame when attaching to an already
+  /// streaming terminal. Hosts that restore a persisted scroll position via
+  /// [scrollController]'s initial offset (panel/board remounts) pass [false]
+  /// so the restored offset is honored on the very first frame — with [true]
+  /// the attach snap overrides it and the viewport flashes the bottom for a
+  /// frame before the host can jump back.
+  final bool snapToBottomOnAttach;
 
   @override
   State<TerminalView> createState() => TerminalViewState();
@@ -257,6 +268,7 @@ class TerminalViewState extends State<TerminalView> {
           focusNode: _focusNode,
           cursorType: widget.cursorType,
           alwaysShowCursor: widget.alwaysShowCursor,
+          snapToBottomOnAttach: widget.snapToBottomOnAttach,
           onEditableRect: _onEditableRect,
           inputConnectionOpen: () => hasInputConnection,
           composingText: _composingText,
@@ -539,6 +551,7 @@ class _TerminalView extends LeafRenderObjectWidget {
     required this.focusNode,
     required this.cursorType,
     required this.alwaysShowCursor,
+    required this.snapToBottomOnAttach,
     this.onEditableRect,
     this.inputConnectionOpen,
     this.composingText,
@@ -566,6 +579,8 @@ class _TerminalView extends LeafRenderObjectWidget {
 
   final bool alwaysShowCursor;
 
+  final bool snapToBottomOnAttach;
+
   final EditableRectCallback? onEditableRect;
 
   /// Reports whether an IME input connection is open; when it returns false
@@ -591,6 +606,7 @@ class _TerminalView extends LeafRenderObjectWidget {
       onEditableRect: onEditableRect,
       inputConnectionOpen: inputConnectionOpen,
       composingText: composingText,
+      snapToBottomOnAttach: snapToBottomOnAttach,
     );
   }
 
@@ -610,7 +626,8 @@ class _TerminalView extends LeafRenderObjectWidget {
       ..alwaysShowCursor = alwaysShowCursor
       ..onEditableRect = onEditableRect
       ..inputConnectionOpen = inputConnectionOpen
-      ..composingText = composingText;
+      ..composingText = composingText
+      ..snapToBottomOnAttach = snapToBottomOnAttach;
   }
 }
 

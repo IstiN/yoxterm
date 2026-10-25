@@ -36,6 +36,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     EditableRectCallback? onEditableRect,
     ValueGetter<bool>? inputConnectionOpen,
     String? composingText,
+    bool snapToBottomOnAttach = true,
   })  : _terminal = terminal,
         _controller = controller,
         _offset = offset,
@@ -47,6 +48,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         _onEditableRect = onEditableRect,
         _inputConnectionOpen = inputConnectionOpen,
         _composingText = composingText,
+        _snapToBottomOnAttach = snapToBottomOnAttach,
         _painter = TerminalPainter(
           theme: theme,
           textStyle: textStyle,
@@ -299,6 +301,29 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
   var _stickToBottom = true;
 
+  /// Whether the first layout after this render object was created should
+  /// force the viewport to the bottom of the scrollback. [true] by default,
+  /// preserving the legacy behavior for hosts that attach to an already
+  /// streaming terminal: the viewport follows new output from the first
+  /// frame on. Hosts that restore a persisted scroll position into the
+  /// scroll controller's initial offset (board/panel remounts) pass [false]
+  /// so the incoming offset is honored on the very first frame instead of
+  /// being overridden — otherwise the remount flashes the bottom of the
+  /// scrollback for a frame before the host's post-frame restore lands.
+  bool _snapToBottomOnAttach;
+
+  /// Sets whether the first layout snaps the viewport to the bottom.
+  /// Assignment only affects the next attach; changing it later does not
+  /// move the viewport.
+  set snapToBottomOnAttach(bool value) {
+    if (value == _snapToBottomOnAttach) return;
+    _snapToBottomOnAttach = value;
+  }
+
+  /// Whether the attach-time snap decision has been made yet. Seeded once
+  /// in [performLayout]; every later layout uses [_stickToBottom] as before.
+  bool _didAttachSnap = false;
+
   void _onScroll() {
     // Half-line tolerance: landing a hair short of the live max (fractional
     // cell metrics, or a programmatic jump clamped to the framework-cached
@@ -446,7 +471,20 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
 
     _updateScrollOffset();
 
-    if (_stickToBottom) {
+    if (!_didAttachSnap) {
+      _didAttachSnap = true;
+      if (_snapToBottomOnAttach) {
+        if (_stickToBottom) {
+          _offset.correctBy(_maxScrollExtent - _scrollOffset);
+        }
+      } else {
+        // Honor the scroll controller's initial offset: seed follow mode
+        // from where that offset actually landed (half-line tolerance, same
+        // as [_onScroll]) instead of forcing the viewport to the bottom.
+        _stickToBottom = _scrollOffset >=
+            _maxScrollExtent - _painter.cellSize.height / 2;
+      }
+    } else if (_stickToBottom) {
       _offset.correctBy(_maxScrollExtent - _scrollOffset);
     }
   }
