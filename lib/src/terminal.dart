@@ -569,6 +569,19 @@ class Terminal with Observable implements TerminalState, EscapeHandler, TextRunH
 
     onResize?.call(newWidth, newHeight, pixelWidth ?? 0, pixelHeight ?? 0);
 
+    // A same-size resize must be a true no-op for the emulator state.
+    // Views re-apply their viewport dimensions on every (re)attach — e.g.
+    // yoloit board-switch remounts — and a spurious resize used to reset the
+    // DECSTBM scroll margins on both buffers, clear the alt-buffer
+    // scrollback and clamp the cursor. The PTY sees no size change for
+    // this, so a differential TUI gets no SIGWINCH/full-redraw and keeps
+    // writing into a grid whose scroll region silently changed: old and new
+    // frames interleaved until a manual resize forced a redraw. [onResize]
+    // still fires above so hosts can re-sync their backend dimensions.
+    if (newWidth == _viewWidth && newHeight == _viewHeight) {
+      return;
+    }
+
     //we need to resize both buffers so that they are ready when we switch between them
     _altBuffer.resize(_viewWidth, _viewHeight, newWidth, newHeight);
     _mainBuffer.resize(_viewWidth, _viewHeight, newWidth, newHeight);
